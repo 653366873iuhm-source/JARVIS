@@ -36,6 +36,13 @@
       "when": 1793200000001,
       "tag": "0004_mining_e8",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1793193144193,
+      "tag": "0005_airdrop_autoverify",
+      "breakpoints": true
     }
   ]
 }

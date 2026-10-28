@@ -135,7 +135,7 @@ describe("airdrop routes", () => {
     expect(csv.statusCode).toBe(200);
     expect(csv.headers["content-type"]).toContain("text/csv");
     const lines = csv.body.trim().split("\n");
-    expect(lines[0]).toBe("id,x_handle,x_url,wallet,agent_id,repost_url,amount,status,created_at_utc");
+    expect(lines[0]).toBe("id,x_handle,x_url,wallet,agent_id,repost_url,amount,status,review_reason,created_at_utc");
     expect(lines.length).toBe(3);
     expect(csv.body).toContain(`alice_01,https://x.com/alice_01,${A(0xa1)},agent1.ai,https://x.com/alice_01/status/1234567890123,1000,pending_verification`);
     const js = await get("/v1/airdrop/claims?format=json", { authorization: `Bearer ${TOKEN}` });

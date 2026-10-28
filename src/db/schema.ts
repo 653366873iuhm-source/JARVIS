@@ -300,6 +300,8 @@ export function defineSchema(b: Builders) {
       ipHash: text("ip_hash"), // HMAC of client IP (rate-limit audit; raw IP never stored)
       repostUrl: text("repost_url"), // URL of the user's repost / quote of the pinned post (v2 claims)
       agentId: text("agent_id"), // Binance Agent ID, e.g. "alice.ai" (lowercased; resolved on-chain to `wallet`)
+      reviewReason: text("review_reason"), // why the claim is pending / how it was approved (auto-verify result code)
+      verifyAttempts: int("verify_attempts").notNull().default(0), // FxTwitter auto-verify attempts (sweep retries)
       createdAt: int("created_at").notNull(),
       updatedAt: int("updated_at").notNull(),
     },

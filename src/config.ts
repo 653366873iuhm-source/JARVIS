@@ -121,6 +121,11 @@ export const ConfigSchema = z.object({
   // ---- ChyAI airdrop credential (soulbound ChyAICredential). Unset = not deployed: no vouchers, nobody mines.
   CREDENTIAL_ADDRESS: addr.optional(),
   CREDENTIAL_VOUCHER_TTL_SEC: num(86400),
+  // auto-approval: the submitted post must quote or reply to the pinned post (checked via FxTwitter)
+  AIRDROP_PINNED_TWEET_ID: z.string().regex(/^\d{1,25}$/).optional(),
+  AIRDROP_AUTO_APPROVE: bool(false),
+  AIRDROP_VERIFY_SWEEP_MS: num(600_000), // background retry of pending claims (FxTwitter down / post not visible yet)
+  AIRDROP_VERIFY_MAX_ATTEMPTS: num(36), // then left pending for manual review
   AIRDROP_REGISTRATION_EXPIRY_DAYS: num(365), // expiry of the AgentRegistry entry issued with an approved claim
 
   // ---- 挖矿积分 (off-chain mining points)

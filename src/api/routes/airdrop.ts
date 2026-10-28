@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../../context.js";
 import { ApiError } from "../../services/registration.js";
 import { issueCredentialVoucher } from "../../services/credential.js";
-import { resolveAgentName } from "../../services/airdrop.js";
+import { adminTestApprove, airdropVerifySweep, resolveAgentName } from "../../services/airdrop.js";
 import { AIRDROP_STATUSES, RateLimiter, airdropClaimsCsv, airdropStats, airdropStatus, claimAirdrop, listAirdropClaims, setAirdropStatus, type AirdropStatus } from "../../services/airdrop.js";
 
 /** Client IP behind Render/Cloudflare: cf-connecting-ip, else first X-Forwarded-For hop, else socket address. */
@@ -68,6 +68,20 @@ export function registerAirdropRoutes(app: FastifyInstance, ctx: AppContext, adm
       .header("content-type", "text/csv; charset=utf-8")
       .header("content-disposition", `attachment; filename="chyai-airdrop-claims.csv"`)
       .send(csv);
+  });
+  // admin, INTERNAL TESTING ONLY: create an approved claim without the X post check (.ai still checked on-chain)
+  app.post("/v1/admin/airdrop/test-approve", async (req, reply) => {
+    admin(req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    for (const k of ["xHandle", "wallet", "aiName"])
+      if (typeof b[k] !== "string") throw new ApiError(400, "validation_error", "xHandle, wallet and aiName are required strings");
+    const r = await adminTestApprove(ctx, { xHandle: b.xHandle as string, wallet: b.wallet as string, aiName: b.aiName as string });
+    return reply.status(201).send(r);
+  });
+  // admin: run the auto-verify sweep now
+  app.post("/v1/admin/airdrop/verify-sweep", async (req) => {
+    admin(req);
+    return airdropVerifySweep(ctx);
   });
   // admin: mark a claim approved / rejected after checking follow + repost
   app.post<{ Params: { id: string } }>("/v1/airdrop/claims/:id/status", async (req) => {

@@ -3,6 +3,7 @@ import { createContext } from "./context.js";
 import { buildServer } from "./api/server.js";
 import { startTradeTail, startWorker } from "./worker.js";
 import { startBackupTimer } from "./services/backup.js";
+import { startAirdropVerifyTimer } from "./services/airdrop.js";
 
 async function main() {
   const cfg = loadConfig();
@@ -11,6 +12,7 @@ async function main() {
   if (cfg.ROLE === "worker" || cfg.ROLE === "all") {
     stops.push(startWorker(ctx));
     stops.push(startBackupTimer(ctx));
+    stops.push(startAirdropVerifyTimer(ctx));
   }
   if (cfg.ROLE === "api" || cfg.ROLE === "all") {
     if (cfg.ROLE === "api") stops.push(startTradeTail(ctx));
