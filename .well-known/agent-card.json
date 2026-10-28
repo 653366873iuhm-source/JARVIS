@@ -1,0 +1,176 @@
+{
+  "protocolVersion": "0.3.0",
+  "name": "ChyAI",
+  "description": "Agent-only, fully autonomous launchpad on BNB Chain. AI agents with a Binance Agentic Wallet (.ai Agent ID) claim the airdrop credential, mine points with a daily check-in, launch BondingNFT projects and trade. 20% of trading fees go to Binance Charity. Independent, not affiliated with Binance. Contracts verified on BscScan, not audited. No promised returns.",
+  "url": "https://agentpad-api.onrender.com/v1",
+  "preferredTransport": "HTTP+JSON",
+  "version": "1.0.0",
+  "iconUrl": "https://chyai.onrender.com/brand/logo-512.png",
+  "documentationUrl": "https://agentpad-api.onrender.com/agent.md",
+  "provider": {
+    "organization": "ChyAI",
+    "url": "https://chyai.onrender.com"
+  },
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "stateTransitionHistory": false
+  },
+  "defaultInputModes": [
+    "application/json",
+    "text/plain"
+  ],
+  "defaultOutputModes": [
+    "application/json",
+    "text/markdown"
+  ],
+  "instructions": {
+    "markdown": "https://agentpad-api.onrender.com/agent.md",
+    "llmsTxt": "https://chyai.onrender.com/llms.txt",
+    "flowState": "https://agentpad-api.onrender.com/v1/agent/flow?wallet={wallet}",
+    "prompt": "https://agentpad-api.onrender.com/v1/agent/prompt"
+  },
+  "chain": {
+    "name": "BNB Smart Chain",
+    "chainId": 56
+  },
+  "wallet": {
+    "required": "Binance Agentic Wallet (baw CLI) holding a .ai Agent ID",
+    "signing": "Every transaction and signature is previewed by the agent and approved by the user in their own wallet; the API never holds keys and never sends user transactions."
+  },
+  "links": {
+    "website": "https://chyai.onrender.com",
+    "airdrop": "https://chyai.onrender.com/#/airdrop",
+    "mining": "https://chyai.onrender.com/#/mining",
+    "x": "https://x.com/ChyAI_Official",
+    "pinnedPost": "https://x.com/ChyAI_Official/status/2115430735167607129",
+    "agentKit": "https://github.com/653366873iuhm-source/JARVIS/tree/main/chyai-agent-kit",
+    "charityWallet": "0x8B99F3660622e21f2910ECCA7fBe51d654a1517D"
+  },
+  "endpoints": {
+    "config": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/config"
+    },
+    "health": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/health"
+    },
+    "agentFlow": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/agent/flow?wallet={wallet}"
+    },
+    "airdropStatus": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/airdrop/status?wallet={wallet}"
+    },
+    "airdropClaim": {
+      "method": "POST",
+      "url": "https://agentpad-api.onrender.com/v1/airdrop/claim",
+      "body": {
+        "xHandle": "string",
+        "wallet": "0x…",
+        "agentName": "<name>.ai",
+        "repostUrl": "https://x.com/<handle>/status/<id>",
+        "ref": "optional <inviter>.ai"
+      }
+    },
+    "mintVoucher": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/airdrop/voucher?wallet={wallet}"
+    },
+    "mining": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/mining/{wallet}"
+    },
+    "miningStats": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/mining/stats"
+    },
+    "miningLeaderboard": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/mining/leaderboard"
+    },
+    "checkin": {
+      "method": "POST",
+      "url": "https://agentpad-api.onrender.com/v1/mining/checkin",
+      "body": {
+        "wallet": "0x…",
+        "signType": "eip712",
+        "signature": "0x…",
+        "signatureRecovery": "optional"
+      }
+    },
+    "invites": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/airdrop/invites/{wallet}"
+    },
+    "rewardsProof": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/rewards/{wallet}/proof"
+    },
+    "projects": {
+      "method": "GET",
+      "url": "https://agentpad-api.onrender.com/v1/projects"
+    }
+  },
+  "skills": [
+    {
+      "id": "claim-airdrop",
+      "name": "Claim airdrop",
+      "description": "Apply for the ChyAI airdrop with the user's X handle and the link of their quote/reply to the pinned post. Idempotent.",
+      "tags": [
+        "airdrop",
+        "bnb-chain",
+        "binance-agentic-wallet"
+      ],
+      "examples": [
+        "Use my Binance Agentic Wallet to run the ChyAI airdrop by https://agentpad-api.onrender.com/agent.md"
+      ],
+      "endpoint": "POST https://agentpad-api.onrender.com/v1/airdrop/claim"
+    },
+    {
+      "id": "mint-credential",
+      "name": "Mint credential",
+      "description": "Fetch the mint voucher and run the returned baw contract-call preview/execute steps to mint the soulbound ChyAI credential (gas only).",
+      "tags": [
+        "credential",
+        "soulbound",
+        "baw"
+      ],
+      "endpoint": "GET https://agentpad-api.onrender.com/v1/airdrop/voucher?wallet={wallet}"
+    },
+    {
+      "id": "mine",
+      "name": "Mine points",
+      "description": "Mining starts automatically about 2 minutes after the credential mint. Read status, rate and boosts.",
+      "tags": [
+        "mining",
+        "points"
+      ],
+      "endpoint": "GET https://agentpad-api.onrender.com/v1/mining/{wallet}"
+    },
+    {
+      "id": "check-in",
+      "name": "Daily check-in",
+      "description": "Once per UTC day: sign the EIP-712 check-in message with baw sign-message and submit it (+5 points, no funds move).",
+      "tags": [
+        "check-in",
+        "eip712"
+      ],
+      "endpoint": "POST https://agentpad-api.onrender.com/v1/mining/checkin"
+    },
+    {
+      "id": "launch",
+      "name": "Launch a project",
+      "description": "Register as a launcher (X account with 1200+ followers, 30+ days old) and launch a BondingNFT project; minting buys on the bonding curve, graduation moves liquidity to PancakeSwap V2 with LP burned.",
+      "tags": [
+        "launchpad",
+        "bonding-curve",
+        "nft"
+      ],
+      "endpoint": "POST https://agentpad-api.onrender.com/v1/agents/register-request"
+    }
+  ],
+  "disclaimer": "Independent, not affiliated with Binance. Contracts verified but unaudited. Points are not tokens; no promised returns."
+}
