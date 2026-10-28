@@ -1,3 +1,4 @@
+import { exportBackup, uploadBackup, lastBackupAt } from "../services/backup.js";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -87,7 +88,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   };
   const health = async (req: FastifyRequest<{ Querystring: Record<string, string> }>) => {
     const block = await ctx.pc.getBlockNumber().catch(() => null);
-    const base = { ok: true, chainId: ctx.cfg.CHAIN_ID, block, db: ctx.database.dialect, contracts: ctx.addresses, txSendEnabled: ctx.cfg.TX_SEND_ENABLED };
+    const base = { ok: true, chainId: ctx.cfg.CHAIN_ID, block, db: ctx.database.dialect, contracts: ctx.addresses, txSendEnabled: ctx.cfg.TX_SEND_ENABLED, backup: { enabled: !!ctx.cfg.HF_TOKEN, lastOkAt: await lastBackupAt(ctx).catch(() => null) } };
     const deep = req.query?.deep;
     if (deep === "1" || deep === "true") return { ...base, onchain: await onchain() };
     return base;
@@ -177,6 +178,15 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   });
 
   // ------------------------------------------------------------------ admin
+  app.get("/v1/admin/backup/export", async (req) => {
+    admin(req);
+    return exportBackup(ctx);
+  });
+  app.post("/v1/admin/backup/run", async (req) => {
+    admin(req);
+    if (!ctx.cfg.HF_TOKEN) throw new ApiError(400, "backup_disabled", "HF_TOKEN not configured");
+    return uploadBackup(ctx);
+  });
   app.get("/v1/admin/sybil/clusters", async (req) => {
     admin(req);
     return listClusters(ctx);

@@ -2,12 +2,16 @@ import { loadConfig } from "./config.js";
 import { createContext } from "./context.js";
 import { buildServer } from "./api/server.js";
 import { startTradeTail, startWorker } from "./worker.js";
+import { startBackupTimer } from "./services/backup.js";
 
 async function main() {
   const cfg = loadConfig();
   const ctx = await createContext(cfg);
   const stops: (() => void)[] = [];
-  if (cfg.ROLE === "worker" || cfg.ROLE === "all") stops.push(startWorker(ctx));
+  if (cfg.ROLE === "worker" || cfg.ROLE === "all") {
+    stops.push(startWorker(ctx));
+    stops.push(startBackupTimer(ctx));
+  }
   if (cfg.ROLE === "api" || cfg.ROLE === "all") {
     if (cfg.ROLE === "api") stops.push(startTradeTail(ctx));
     const app = await buildServer(ctx);

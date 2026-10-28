@@ -312,20 +312,20 @@ export function defineSchema(b: Builders) {
   );
 
   // 挖矿积分 (off-chain mining points; convertible to the platform token later under rules announced separately).
-  // Points are stored in milli-points (integer). Accrual is settled lazily: points += rate * elapsed since lastAccrualAt.
+  // Points are stored in units of 1e-8 points (integer). Accrual is settled lazily: points += rate * elapsed since lastAccrualAt.
   const miningAccounts = table(
     "mining_accounts",
     {
       wallet: text("wallet").primaryKey(), // lowercase 0x address
-      pointsMilli: int("points_milli").notNull().default(0), // settled points (accrual + check-ins), x1000
-      checkinMilli: int("checkin_milli").notNull().default(0), // part of pointsMilli from check-ins
-      rateMilliPerDay: int("rate_milli_per_day").notNull().default(0), // rate in force since lastAccrualAt, x1000
+      pointsE8: int("points_e8").notNull().default(0), // settled points (accrual + check-ins), x1e8
+      checkinE8: int("checkin_e8").notNull().default(0), // part of pointsMilli from check-ins
+      rateE8PerDay: int("rate_e8_per_day").notNull().default(0), // rate in force since lastAccrualAt, x1e8
       credit: int("credit").notNull().default(0), // ChyAICredential.creditOf at last settle
       lastAccrualAt: int("last_accrual_at").notNull(),
       createdAt: int("created_at").notNull(),
       updatedAt: int("updated_at").notNull(),
     },
-    (t) => [index("mining_points_idx").on(t.pointsMilli)],
+    (t) => [index("mining_points_idx").on(t.pointsE8)],
   );
   const miningCheckins = table(
     "mining_checkins",
@@ -333,7 +333,7 @@ export function defineSchema(b: Builders) {
       id: text("id").primaryKey(),
       wallet: text("wallet").notNull(),
       day: text("day").notNull(), // UTC YYYY-MM-DD
-      pointsMilli: int("points_milli").notNull(),
+      pointsE8: int("points_e8").notNull(),
       createdAt: int("created_at").notNull(),
     },
     (t) => [uniqueIndex("mining_checkin_uq").on(t.wallet, t.day), index("mining_checkin_day_idx").on(t.day)],

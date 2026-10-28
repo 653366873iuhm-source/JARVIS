@@ -167,3 +167,16 @@ export async function setAirdropStatus(ctx: AppContext, id: string, status: Aird
   await db.update(t.airdropClaims).set({ status, updatedAt: nowSec() }).where(eq(t.airdropClaims.id, id));
   return { ...r, status };
 }
+
+/** Read-only .ai → wallet lookup (on-chain Agent ID registry via ctx.resolver). */
+export async function resolveAgentName(ctx: AppContext, nameIn: string) {
+  const name = normalizeAgentName(nameIn);
+  let r;
+  try {
+    r = await ctx.resolver.resolve(name);
+  } catch (e: any) {
+    throw new ApiError(503, "agent_id_unavailable", `暂时无法查询 Agent ID，请稍后再试（${e?.message ?? e}）`);
+  }
+  if (!r || r.isFallback) throw new ApiError(404, "agent_id_unresolved", `${name} 不存在或未绑定 BSC 地址`);
+  return { name, wallet: checksum(r.address) };
+}

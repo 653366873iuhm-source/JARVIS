@@ -127,7 +127,7 @@ describe("airdrop v2 claim with .ai name", () => {
   it("mining before credential: zero rate, check-in refused", async () => {
     const m = await inject("GET", `/v1/mining/${U.address}`);
     expect(m.status).toBe(200);
-    expect(m.body).toMatchObject({ points: 0, ratePerDay: 0, credential: { active: false } });
+    expect(m.body).toMatchObject({ points: "0.00000000", ratePerDay: 0, ratePerSecond: "0.000000000000", mining: false, credential: { active: false } });
     const signature = await U.signMessage({ message: m.body.checkin.message });
     const c = await inject("POST", "/v1/mining/checkin", { wallet: U.address, signature, message: m.body.checkin.message });
     expect(c.status).toBe(403);
@@ -163,8 +163,15 @@ describe("挖矿积分", () => {
     const { db, t } = ctx.database;
     await db.update(t.miningAccounts).set({ lastAccrualAt: m0.body.asOf - 86400 });
     const m1 = await inject("GET", `/v1/mining/${U.address}`);
-    expect(m1.body.points).toBeGreaterThanOrEqual(10);
-    expect(m1.body.points).toBeLessThan(10.01);
+    expect(m1.body.points).toMatch(/^\d+\.\d{8}$/);
+    expect(Number(m1.body.points)).toBeGreaterThanOrEqual(10);
+    expect(Number(m1.body.points)).toBeLessThan(10.01);
+    expect(m1.body.mining).toBe(true);
+    expect(Number(m1.body.ratePerSecond)).toBeCloseTo(10 / 86400, 10);
+    // sub-milli precision: a tiny rate (0.0017/day) must still accrue across frequent reads
+    const { fmtE8, ratePerSecondStr } = await import("../../src/services/mining.js");
+    expect(fmtE8(1086658)).toBe("0.01086658");
+    expect(ratePerSecondStr(170000)).toBe("0.000000019675");
   });
   it("boost from indexed launches and curve volume", async () => {
     const { db, t } = ctx.database;
@@ -191,15 +198,23 @@ describe("挖矿积分", () => {
     const old = msg.replace(/Date \(UTC\): .*/, "Date (UTC): 2020-01-01");
     const stale = await inject("POST", "/v1/mining/checkin", { wallet: U.address, signature: await U.signMessage({ message: old }), message: old });
     expect(stale.status).toBe(400);
-    const before = m.body.points;
+    const before = Number(m.body.points);
     const ok = await inject("POST", "/v1/mining/checkin", { wallet: U.address, signature: await U.signMessage({ message: msg }), message: msg });
     expect(ok.status, JSON.stringify(ok.body)).toBe(200);
     expect(ok.body.added).toBe(5);
-    expect(ok.body.mining.points).toBeGreaterThanOrEqual(before + 5);
+    expect(Number(ok.body.mining.points)).toBeGreaterThanOrEqual(before + 5);
     expect(ok.body.mining.checkin.checkedInToday).toBe(true);
     const twice = await inject("POST", "/v1/mining/checkin", { wallet: U.address, signature: await U.signMessage({ message: msg }), message: msg });
     expect(twice.status).toBe(409);
     expect(twice.body.error.code).toBe("already_checked_in");
+    // EIP-712 path (baw): valid typed signature by U → passes verification (then 409 already checked in); wrong signer → 401
+    const td = JSON.parse(m.body.checkin.typedData);
+    const { EIP712Domain: _d, ...types } = td.types;
+    const sig712 = await U.signTypedData({ domain: td.domain, types, primaryType: td.primaryType, message: td.message });
+    const t712 = await inject("POST", "/v1/mining/checkin", { wallet: U.address, signType: "eip712", signature: sig712.slice(2, 130), signatureRecovery: sig712.slice(130) });
+    expect(t712.status, JSON.stringify(t712.body)).toBe(409);
+    const bad712 = await inject("POST", "/v1/mining/checkin", { wallet: U.address, signType: "eip712", signature: await V.signTypedData({ domain: td.domain, types, primaryType: td.primaryType, message: td.message }) });
+    expect(bad712.status).toBe(401);
   });
   it("leaderboard + stats", async () => {
     const lb = await inject("GET", "/v1/mining/leaderboard");
@@ -209,7 +224,20 @@ describe("挖矿积分", () => {
     expect(st.body).toMatchObject({ participants: 1, activeMiners: 1, checkinsToday: 1, credentialConfigured: true });
     expect(st.body.rules.note).toContain("不承诺收益");
     const none = await inject("GET", `/v1/mining/${W.address}`);
-    expect(none.body).toMatchObject({ points: 0, ratePerDay: 0 });
+    expect(none.body).toMatchObject({ points: "0.00000000", ratePerDay: 0, mining: false });
+    expect(lb.body.items[0].points).toMatch(/^\d+\.\d{8}$/);
+    const act = await inject("GET", "/v1/mining/activity");
+    expect(act.status).toBe(200);
+    expect(act.body.items.map((i: any) => i.kind).sort()).toEqual(["checkin", "mint"]);
+    expect(act.body.items[0].wallet).toMatch(/^0x[0-9a-fA-F]{2}…[0-9a-fA-F]{2}$/);
+    const res = await inject("GET", "/v1/airdrop/resolve?name=UAlpha.ai");
+    expect(res.body).toMatchObject({ name: "ualpha.ai", wallet: U.address });
+    const nores = await inject("GET", "/v1/airdrop/resolve?name=nobodyhere.ai");
+    expect(nores.status).toBe(404);
+    const exp = await inject("GET", "/v1/admin/backup/export", undefined, ADMIN);
+    expect(exp.status).toBe(200);
+    expect(exp.body.miningAccounts.length).toBe(1);
+    expect(exp.body.airdropClaims.length).toBeGreaterThanOrEqual(1);
     const bad = await inject("GET", "/v1/mining/0x123");
     expect(bad.status).toBe(400);
   });

@@ -31,6 +31,10 @@ export const ConfigSchema = z.object({
   // ---- database
   DATABASE_URL: z.string().default("file:./data/agentpad.db"), // postgres://... or file:... (SQLite/libSQL)
   DB_AUTO_MIGRATE: bool(true),
+  // ---- daily backup of airdrop_claims + mining tables to a PRIVATE Hugging Face dataset (off unless HF_TOKEN is set)
+  HF_TOKEN: z.string().optional(),
+  BACKUP_HF_REPO: z.string().default("agentpad/chyai-backup"),
+  BACKUP_INTERVAL_HOURS: num(24),
 
   // ---- chain
   RPC_URL: z.string().default("http://127.0.0.1:8545"),

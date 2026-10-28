@@ -7,7 +7,7 @@
  *   launches / volume come from the chain indexer (projects.launcher, trades.trader on ChyAI's bonding curves).
  *   + daily 签到: MINING_CHECKIN_POINTS once per wallet per UTC day, proven by a wallet signature (EIP-191 / ERC-1271).
  * Accrual is settled lazily (on read / check-in) and starts the first time the wallet is seen holding a credential.
- * Points are stored as integer milli-points.
+ * Points are stored as integers in units of 1e-8 points ("e8"), so the site can show/tick 8 decimals exactly.
  */
 import { and, count, desc, eq, gte, sql } from "drizzle-orm";
 import type { Hex } from "viem";
@@ -23,11 +23,53 @@ const WEI_PER_BNB = 10n ** 18n;
 
 export const utcDay = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
 export const nextUtcMidnight = (ts: number) => (Math.floor(ts / DAY) + 1) * DAY;
-const pts = (milli: number) => Math.floor(milli) / 1000;
+export const E8 = 100_000_000;
+/** e8 integer → decimal string with exactly 8 decimals ("0.01086658"). */
+export function fmtE8(e8: number | bigint): string {
+  const v = BigInt(Math.trunc(Number(e8)));
+  const neg = v < 0n;
+  const a = neg ? -v : v;
+  return `${neg ? "-" : ""}${a / 100_000_000n}.${(a % 100_000_000n).toString().padStart(8, "0")}`;
+}
+/** points/day (e8) → points/second as a decimal string with 12 decimals (enough precision for client-side ticking). */
+export function ratePerSecondStr(rateE8PerDay: number): string {
+  const v = (BigInt(Math.round(rateE8PerDay)) * 10_000n) / 86_400n; // units of 1e-12 points per second
+  return `${v / 1_000_000_000_000n}.${(v % 1_000_000_000_000n).toString().padStart(12, "0")}`;
+}
+const shortWallet = (w: string) => `${w.slice(0, 4)}…${w.slice(-2)}`;
 
 /** Exact text the wallet signs for 签到 (personal_sign). Valid only on that UTC day. */
 export function checkinMessage(wallet: string, day: string, chainId: number) {
   return ["ChyAI 挖矿签到 / ChyAI mining check-in", `Wallet: ${checksum(wallet)}`, `Date (UTC): ${day}`, `Chain ID: ${chainId}`].join("\n");
+}
+
+/** EIP-712 alternative for wallets that can't personal_sign (Binance Agentic Wallet `baw sign-message` is EIP-712 only). */
+export function checkinTypedData(wallet: string, day: string, chainId: number) {
+  return {
+    domain: { name: "ChyAI Mining", version: "1", chainId },
+    types: { Checkin: [{ name: "wallet", type: "address" }, { name: "day", type: "string" }] },
+    primaryType: "Checkin" as const,
+    message: { wallet: checksum(wallet), day },
+  };
+}
+/** EIP712Domain-inclusive JSON (what eth_signTypedData_v4 / baw expects). */
+export function checkinTypedDataJson(wallet: string, day: string, chainId: number) {
+  const td = checkinTypedData(wallet, day, chainId);
+  return JSON.stringify({
+    ...td,
+    types: { EIP712Domain: [{ name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }], ...td.types },
+  });
+}
+/** Accepts 0x-less hex and baw's split form (64-byte r‖s + signatureRecovery 00/01/1b/1c). */
+export function normalizeSignature(sig: string, recovery?: string): string {
+  let h = String(sig ?? "").trim();
+  if (!h.startsWith("0x")) h = "0x" + h;
+  if (recovery !== undefined && recovery !== null && String(recovery) !== "" && h.length === 2 + 128) {
+    let v = parseInt(String(recovery).replace(/^0x/, ""), 16);
+    if (v < 27) v += 27;
+    h += v.toString(16).padStart(2, "0");
+  }
+  return h;
 }
 
 export interface Activity {
@@ -59,13 +101,13 @@ export function computeRate(cfg: AppContext["cfg"], credit: number, act: Activit
   const volumeBoost = Math.min(cfg.MINING_VOLUME_BOOST_CAP, act.volumeBnb * cfg.MINING_VOLUME_BOOST_PER_BNB);
   const multiplier = 1 + launchBoost + volumeBoost;
   const base = (credit / 1000) * cfg.MINING_POINTS_PER_1000_CREDIT_DAY;
-  const rateMilli = Math.round(base * multiplier * 1000);
-  return { basePerDay: base, launchBoost, volumeBoost, multiplier, rateMilli };
+  const rateE8 = Math.round(base * multiplier * E8);
+  return { basePerDay: base, launchBoost, volumeBoost, multiplier, rateE8 };
 }
 
 type Account = typeof import("../db/schema.sqlite.js").miningAccounts.$inferSelect;
 
-const liveMilli = (a: Account, now: number) => a.pointsMilli + Math.floor((a.rateMilliPerDay * Math.max(0, now - a.lastAccrualAt)) / DAY);
+const liveE8 = (a: Account, now: number) => a.pointsE8 + Math.floor((a.rateE8PerDay * Math.max(0, now - a.lastAccrualAt)) / DAY);
 
 /** Settle accrual up to `now` and switch to the current rate. Returns the (possibly new) account row or null. */
 async function settle(ctx: AppContext, wallet: string, now: number) {
@@ -78,16 +120,16 @@ async function settle(ctx: AppContext, wallet: string, now: number) {
     const [a] = await db.select().from(t.miningAccounts).where(eq(t.miningAccounts.wallet, wallet));
     if (!a) {
       if (credit <= 0) return { account: null, cred, act, rate };
-      const row = { wallet, pointsMilli: 0, checkinMilli: 0, rateMilliPerDay: rate.rateMilli, credit, lastAccrualAt: now, createdAt: now, updatedAt: now };
+      const row = { wallet, pointsE8: 0, checkinE8: 0, rateE8PerDay: rate.rateE8, credit, lastAccrualAt: now, createdAt: now, updatedAt: now };
       const ins = await db.insert(t.miningAccounts).values(row).onConflictDoNothing().returning();
       if (ins.length) return { account: ins[0] as Account, cred, act, rate };
       continue; // raced with another settle → reload
     }
-    const pointsMilli = liveMilli(a, now);
+    const pointsE8 = liveE8(a, now);
     // optimistic lock on lastAccrualAt so concurrent settles never accrue the same interval twice
     const upd = await db
       .update(t.miningAccounts)
-      .set({ pointsMilli, rateMilliPerDay: rate.rateMilli, credit, lastAccrualAt: Math.max(now, a.lastAccrualAt), updatedAt: now })
+      .set({ pointsE8, rateE8PerDay: rate.rateE8, credit, lastAccrualAt: Math.max(now, a.lastAccrualAt), updatedAt: now })
       .where(and(eq(t.miningAccounts.wallet, wallet), eq(t.miningAccounts.lastAccrualAt, a.lastAccrualAt)))
       .returning();
     if (upd.length) return { account: upd[0] as Account, cred, act, rate };
@@ -106,9 +148,12 @@ export async function getMining(ctx: AppContext, walletIn: string) {
   return {
     wallet: checksum(wallet),
     credential: { configured: cred.configured, address: cred.address, active: cred.active, credit: cred.credit, tokenId: cred.tokenId },
-    points: account ? pts(account.pointsMilli) : 0,
-    checkinPoints: account ? pts(account.checkinMilli) : 0,
-    ratePerDay: rate.rateMilli / 1000,
+    points: fmtE8(account ? account.pointsE8 : 0), // decimal string, 8 decimals, settled as of `asOf`
+    pointsE8: String(account ? account.pointsE8 : 0),
+    checkinPoints: fmtE8(account ? account.checkinE8 : 0),
+    ratePerDay: rate.rateE8 / E8,
+    ratePerSecond: ratePerSecondStr(rate.rateE8), // decimal string; live value = points + ratePerSecond × (now − asOf)
+    mining: !!account && rate.rateE8 > 0,
     basePerDay: rate.basePerDay,
     multiplier: rate.multiplier,
     boosts: {
@@ -127,47 +172,54 @@ export async function getMining(ctx: AppContext, walletIn: string) {
       totalCheckins: Number(streakRows?.n ?? 0),
       nextCheckinAt: ci ? nextUtcMidnight(now) : now,
       message: checkinMessage(wallet, today, ctx.cfg.CHAIN_ID),
+      typedData: checkinTypedDataJson(wallet, today, ctx.cfg.CHAIN_ID), // EIP-712 alternative (signType: "eip712")
     },
     asOf: now,
   };
 }
 
-export async function checkin(ctx: AppContext, body: { wallet: string; signature: string; message: string }) {
+export async function checkin(ctx: AppContext, body: { wallet: string; signature: string; message?: string; signType?: string; signatureRecovery?: string }) {
   const wallet = normalizeWallet(body.wallet);
   const now = nowSec();
   const day = utcDay(now);
-  const expected = checkinMessage(wallet, day, ctx.cfg.CHAIN_ID);
-  if (String(body.message ?? "").replace(/\r\n/g, "\n") !== expected)
-    throw new ApiError(400, "bad_message", "签到消息不正确或已过期（每个 UTC 日的签到消息不同，请刷新后重签）", { expected });
-  if (!/^0x[0-9a-fA-F]+$/.test(String(body.signature ?? ""))) throw new ApiError(400, "bad_signature", "signature must be 0x hex");
-  const ok = await verifyAgentSignature(ctx.pc, { kind: "eip191", address: checksum(wallet), signature: body.signature as Hex, message: expected });
-  if (!ok) throw new ApiError(401, "bad_signature", "钱包签名校验失败");
+  const signature = normalizeSignature(body.signature, body.signatureRecovery);
+  if (!/^0x[0-9a-fA-F]+$/.test(signature)) throw new ApiError(400, "bad_signature", "signature must be hex");
+  let ok: boolean;
+  if (String(body.signType ?? "").toLowerCase() === "eip712") {
+    ok = await verifyAgentSignature(ctx.pc, { kind: "eip712", address: checksum(wallet), signature: signature as Hex, typedData: checkinTypedData(wallet, day, ctx.cfg.CHAIN_ID) as any });
+  } else {
+    const expected = checkinMessage(wallet, day, ctx.cfg.CHAIN_ID);
+    if (String(body.message ?? "").replace(/\r\n/g, "\n") !== expected)
+      throw new ApiError(400, "bad_message", "签到消息不正确或已过期（每个 UTC 日的签到消息不同，请刷新后重签）", { expected });
+    ok = await verifyAgentSignature(ctx.pc, { kind: "eip191", address: checksum(wallet), signature: signature as Hex, message: expected });
+  }
+  if (!ok) throw new ApiError(401, "bad_signature", "钱包签名校验失败（EIP-712 签名只对当天 UTC 日期有效）");
 
   const { account } = await settle(ctx, wallet, now);
   if (!account) throw new ApiError(403, "no_credential", "该钱包没有有效的 ChyAI 凭证，先去空投页 mint 凭证");
   const { db, t } = ctx.database;
-  const milli = Math.round(ctx.cfg.MINING_CHECKIN_POINTS * 1000);
+  const e8 = Math.round(ctx.cfg.MINING_CHECKIN_POINTS * E8);
   try {
-    await db.insert(t.miningCheckins).values({ id: uuid(), wallet, day, pointsMilli: milli, createdAt: now });
+    await db.insert(t.miningCheckins).values({ id: uuid(), wallet, day, pointsE8: e8, createdAt: now });
   } catch {
     throw new ApiError(409, "already_checked_in", "今天已经签到过了（每个钱包每个 UTC 日一次）", { nextCheckinAt: nextUtcMidnight(now) });
   }
   await db
     .update(t.miningAccounts)
-    .set({ pointsMilli: sql`${t.miningAccounts.pointsMilli} + ${milli}`, checkinMilli: sql`${t.miningAccounts.checkinMilli} + ${milli}`, updatedAt: now })
+    .set({ pointsE8: sql`${t.miningAccounts.pointsE8} + ${e8}`, checkinE8: sql`${t.miningAccounts.checkinE8} + ${e8}`, updatedAt: now })
     .where(eq(t.miningAccounts.wallet, wallet));
-  return { wallet: checksum(wallet), day, added: milli / 1000, nextCheckinAt: nextUtcMidnight(now), mining: await getMining(ctx, wallet) };
+  return { wallet: checksum(wallet), day, added: e8 / E8, nextCheckinAt: nextUtcMidnight(now), mining: await getMining(ctx, wallet) };
 }
 
 export async function miningLeaderboard(ctx: AppContext, limit = 50) {
   const { db, t } = ctx.database;
   const now = nowSec();
-  const rows = await db.select().from(t.miningAccounts).orderBy(desc(t.miningAccounts.pointsMilli)).limit(Math.max(limit * 4, 200));
+  const rows = await db.select().from(t.miningAccounts).orderBy(desc(t.miningAccounts.pointsE8)).limit(Math.max(limit * 4, 200));
   const ranked = rows
-    .map((a) => ({ wallet: checksum(a.wallet), points: pts(liveMilli(a as Account, now)), ratePerDay: a.rateMilliPerDay / 1000, credit: a.credit }))
-    .sort((x, y) => y.points - x.points)
+    .map((a) => ({ wallet: checksum(a.wallet), e8: liveE8(a as Account, now), ratePerDay: a.rateE8PerDay / E8, credit: a.credit }))
+    .sort((x, y) => y.e8 - x.e8)
     .slice(0, limit)
-    .map((r, i) => ({ rank: i + 1, ...r }));
+    .map(({ e8, ...r }, i) => ({ rank: i + 1, ...r, points: fmtE8(e8) }));
   return { asOf: now, items: ranked };
 }
 
@@ -178,8 +230,8 @@ export async function miningStats(ctx: AppContext) {
   let total = 0;
   let active = 0;
   for (const a of rows) {
-    total += liveMilli(a as Account, now);
-    if (a.rateMilliPerDay > 0) active++;
+    total += liveE8(a as Account, now);
+    if (a.rateE8PerDay > 0) active++;
   }
   const [ci] = await db.select({ n: count() }).from(t.miningCheckins).where(eq(t.miningCheckins.day, utcDay(now)));
   const c = ctx.cfg;
@@ -187,7 +239,7 @@ export async function miningStats(ctx: AppContext) {
     asOf: now,
     participants: rows.length,
     activeMiners: active,
-    totalPoints: pts(total),
+    totalPoints: fmtE8(total),
     checkinsToday: Number(ci?.n ?? 0),
     credentialConfigured: !!c.CREDENTIAL_ADDRESS,
     credentialAddress: c.CREDENTIAL_ADDRESS ?? null,
@@ -202,4 +254,21 @@ export async function miningStats(ctx: AppContext) {
       note: "积分将按规则兑换平台币，具体比例与时间另行公告，不承诺收益",
     },
   };
+}
+
+/** Public feed of recent mining activity: daily check-ins and credential holders starting to mine. Wallets shortened. */
+export async function miningActivity(ctx: AppContext, limit = 30) {
+  const { db, t } = ctx.database;
+  const n = Math.max(1, Math.min(100, limit));
+  const [cis, starts] = await Promise.all([
+    db.select().from(t.miningCheckins).orderBy(desc(t.miningCheckins.createdAt)).limit(n),
+    db.select().from(t.miningAccounts).orderBy(desc(t.miningAccounts.createdAt)).limit(n),
+  ]);
+  const items = [
+    ...cis.map((c) => ({ kind: "checkin" as const, wallet: shortWallet(checksum(c.wallet)), points: fmtE8(c.pointsE8), ts: c.createdAt })),
+    ...starts.map((a) => ({ kind: "mint" as const, wallet: shortWallet(checksum(a.wallet)), credit: a.credit, ts: a.createdAt })),
+  ]
+    .sort((x, y) => y.ts - x.ts)
+    .slice(0, n);
+  return { asOf: nowSec(), items };
 }
