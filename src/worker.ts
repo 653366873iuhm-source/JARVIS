@@ -7,6 +7,8 @@ import { epochOf, runRewardEpoch } from "./services/rewards.js";
 import { requalifyAgents } from "./services/requalify.js";
 import { runSybilScan } from "./services/sybil.js";
 import { metadataTick } from "./services/metadata.js";
+import { reconcileNftHoldings } from "./services/reconcile.js";
+import { startSignerWatch } from "./services/health.js";
 
 function loop(name: string, ms: number, fn: () => Promise<unknown>, ctx: AppContext) {
   let running = false;
@@ -28,6 +30,19 @@ function loop(name: string, ms: number, fn: () => Promise<unknown>, ctx: AppCont
   };
 }
 
+/** Settles the previous UTC day's reward epoch when no row exists yet (cron missed). Same code path as the cron. */
+export async function rewardCatchUp(ctx: AppContext) {
+  const { db, t } = ctx.database;
+  const now = await clockNow(ctx);
+  if (now % 86400 < 15 * 60) return { skipped: "cron window" }; // let the 00:10 UTC cron run first
+  const epoch = epochOf(now) - 1;
+  const [row] = await db.select().from(t.rewardEpochs).where(eq(t.rewardEpochs.epoch, epoch));
+  if (row && row.status !== "computed") return { epoch, skipped: row.status };
+  const r = await runRewardEpoch(ctx, { epoch });
+  ctx.log.info({ epoch, status: r.status }, "reward epoch settled (catch-up)");
+  return r;
+}
+
 /** Background jobs: indexer + promotion gate loops, and cron jobs for rewards / requalification / sybil scan. */
 export function startWorker(ctx: AppContext) {
   const indexer = new Indexer(ctx);
@@ -35,6 +50,10 @@ export function startWorker(ctx: AppContext) {
   stops.push(loop("indexer", ctx.cfg.INDEXER_POLL_MS, () => indexer.syncToHead(), ctx));
   stops.push(loop("promotion", ctx.cfg.PROMO_POLL_MS, () => promotionTick(ctx), ctx));
   stops.push(loop("metadata", ctx.cfg.METADATA_POLL_MS, () => metadataTick(ctx), ctx));
+  // free hosts sleep / redeploy: settle yesterday's reward epoch if the 00:10 UTC cron did not run (idempotent)
+  if (ctx.cfg.REWARD_CATCHUP_MS > 0) stops.push(loop("reward-catchup", ctx.cfg.REWARD_CATCHUP_MS, () => rewardCatchUp(ctx), ctx));
+  stops.push(loop("nft-reconcile", 6 * 3600_000, () => reconcileNftHoldings(ctx), ctx));
+  stops.push(startSignerWatch(ctx));
   const crons = [
     new Cron(ctx.cfg.REWARD_CRON, { timezone: "UTC", protect: true }, async () => {
       const epoch = epochOf(await clockNow(ctx)) - 1; // settle yesterday (UTC)

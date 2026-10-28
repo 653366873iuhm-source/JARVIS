@@ -71,7 +71,7 @@ beforeAll(async () => {
     NODE_ENV: "test", DATABASE_URL: `file:${dbFile}`, RPC_URL: node.url, CHAIN_ID: "31337",
     REGISTRY_ADDRESS: dep.contracts.AgentRegistry, FACTORY_ADDRESS: dep.contracts.LaunchFactory, REWARD_POOL_ADDRESS: dep.contracts.RewardPool,
     FEE_SPLITTER_ADDRESS: dep.contracts.FeeSplitter, SIGNER_PRIVATE_KEY: pk(1), X_PROVIDER: "mock", AGENTID_PROVIDER: "mock",
-    ADMIN_TOKEN: "test-admin", CREDENTIAL_ADDRESS: credential, MINING_CREDIT_CACHE_SEC: "0",
+    ADMIN_TOKEN: "test-admin", CREDENTIAL_ADDRESS: credential, MINING_CREDIT_CACHE_SEC: "0", EARLYBIRD_SLOTS: "0", MINING_STATS_MIN_PARTICIPANTS: "0",
   });
   resolver = new MockAgentIdResolver();
   ctx = await createContext(cfg, { x: new MockXProvider(), resolver, log: quiet });

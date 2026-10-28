@@ -98,5 +98,45 @@ export function publicConfig(ctx: AppContext) {
       requalifyIntervalDays: c.REQUALIFY_INTERVAL_DAYS,
     },
     credential: { mintAddress: credentialMintAddress(c), mintVersion: Number(c.CREDENTIAL_MINT_VERSION), validAddresses: credentialAddresses(c) },
+    announcements: parseAnnouncements(c.ANNOUNCEMENTS_JSON),
+    // community links: empty = not set (the site hides it)
+    community: { x: safeUrl(c.COMMUNITY_X), telegram: safeUrl(c.COMMUNITY_TELEGRAM), discord: safeUrl(c.COMMUNITY_DISCORD) },
   };
+}
+
+/** Only http(s) links (no javascript: etc.); anything else → "". */
+export function safeUrl(v: unknown): string {
+  const s = String(v ?? "").trim();
+  return /^https:\/\/[^\s"'<>]+$/i.test(s) ? s : "";
+}
+
+export interface Announcement {
+  id: string;
+  zh: string;
+  en: string;
+  href: string | null; // site route ("/airdrop") or https URL
+  level: "info" | "warn";
+}
+/** ANNOUNCEMENTS_JSON → validated list (bad entries dropped; never throws). */
+export function parseAnnouncements(raw: string | undefined): Announcement[] {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw && raw.trim() ? raw : "[]");
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(v)) return [];
+  const out: Announcement[] = [];
+  for (const a of v.slice(0, 5)) {
+    if (!a || typeof a !== "object") continue;
+    const o = a as Record<string, unknown>;
+    const zh = String(o.zh ?? "").trim().slice(0, 200);
+    const en = String(o.en ?? "").trim().slice(0, 200);
+    const id = String(o.id ?? "").trim().slice(0, 64);
+    if (!id || (!zh && !en)) continue;
+    const h = String(o.href ?? "").trim();
+    const href = /^\/[A-Za-z0-9/_?=&.-]*$/.test(h) ? h : safeUrl(h) || null;
+    out.push({ id, zh: zh || en, en: en || zh, href, level: o.level === "warn" ? "warn" : "info" });
+  }
+  return out;
 }

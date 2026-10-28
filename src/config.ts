@@ -153,6 +153,33 @@ export const ConfigSchema = z.object({
   INVITE_MIN_CHECKIN_DAYS: num(7), // invitee must check in on this many distinct UTC days
   INVITE_MIN_X_AGE_DAYS: num(30), // invitee X account must be at least this old
 
+  // ---- early bird (前 1000 名早鸟): the first EARLYBIRD_SLOTS real credential minters (hidden test wallets excluded,
+  // ordered by mining start ≈ mint, within ~2 min) whose mint is no later than EARLYBIRD_END_AT get +EARLYBIRD_BOOST
+  // mining speed for EARLYBIRD_DAYS after their mint. Additive with launch / volume / invite boosts.
+  EARLYBIRD_SLOTS: num(1000),
+  EARLYBIRD_BOOST: num(0.2),
+  EARLYBIRD_DAYS: num(30),
+  // ISO date-time with zone or unix seconds; default 2026-11-30 23:59 Asia/Shanghai
+  EARLYBIRD_END_AT: z.string().default("2026-11-30T23:59:00+08:00"),
+  // public mining stats (participants / mining / total points / check-ins today) are withheld below this many participants
+  MINING_STATS_MIN_PARTICIPANTS: num(100),
+
+  // ---- monitoring / alerts
+  SIGNER_LOW_BALANCE_BNB: num(0.0008), // signerLow:true below this (≈ 1 week of platform txs)
+  SIGNER_BALANCE_CACHE_SEC: num(120),
+  INDEXER_MAX_LAG_BLOCKS: num(1200), // /v1/health/full indexer.ok=false when the indexer is further behind the chain head
+  SITE_URL: z.string().optional(), // site checked by /v1/health/full (default PUBLIC_APP_URL)
+  REWARD_CATCHUP_MS: num(3_600_000), // settle yesterday's reward epoch if the 00:10 UTC cron was missed (free host asleep / redeploy); 0 = off
+
+  // ---- site config served at /v1/config (announcement bar + community links; unset links are hidden)
+  // JSON array of {id, zh, en, href?, level?}; "" or "[]" = no announcement
+  ANNOUNCEMENTS_JSON: z.string().default(JSON.stringify([
+    { id: "airdrop-agent-2026-10", zh: "空投已开放：交给 AI Agent 一条指令跑完全流程", en: "Airdrop is live: give your AI agent one command to run the whole flow", href: "/airdrop", level: "info" },
+  ])),
+  COMMUNITY_X: z.string().default("https://x.com/ChyAI_Official"),
+  COMMUNITY_TELEGRAM: z.string().default(""),
+  COMMUNITY_DISCORD: z.string().default(""),
+
   // ---- test data hidden from public views (home, ticker / live activity, leaderboards, stats). Not deleted.
   // Defaults: mainnet smoke-test projects CHYTEST + CHYSELL and the smoke-test wallet.
   HIDE_PROJECTS: addrList.transform((v) => (v.length ? v : ["0xe69af8599eda309621bf6bffe64f241df9786d28", "0xbb41b9789cf42bd2752c172170d2efae857f53eb"])),

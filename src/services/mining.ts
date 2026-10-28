@@ -4,6 +4,8 @@
  *
  *   rate/day = credit / 1000 × MINING_POINTS_PER_1000_CREDIT_DAY × multiplier
  *   multiplier = 1 + min(LAUNCH_CAP, launches × LAUNCH_BOOST) + min(VOLUME_CAP, volumeBNB(window) × VOLUME_BOOST_PER_BNB)
+ *              + min(INVITE_CAP, qualifiedInvites × INVITE_BOOST) + (early bird ? EARLYBIRD_BOOST : 0)
+ *   (all additive; defaults: launch ≤ +100%, volume ≤ +200%, invites ≤ +50%, early bird +20% → max ×4.7)
  *   launches / volume come from the chain indexer (projects.launcher, trades.trader on ChyAI's bonding curves).
  *   + daily 签到: MINING_CHECKIN_POINTS once per wallet per UTC day, proven by a wallet signature (EIP-191 / ERC-1271).
  * Accrual is settled lazily (on read / check-in) and starts the first time the wallet is seen holding a credential;
@@ -12,6 +14,7 @@
  */
 import { isHiddenWallet } from "./hidden.js";
 import { inviteBoostOf, qualifiedInviteCount } from "./invites.js";
+import { clearEarlyBirdCache, earlyBirdEnds, earlyBirdOf, earlyBirdSummary, realAccounts, type EarlyBird } from "./earlybird.js";
 import { and, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { Hex } from "viem";
 import type { AppContext } from "../context.js";
@@ -107,6 +110,26 @@ export async function activateMintedCredentials(ctx: AppContext, limit = 200) {
   return { checked: todo.length, activated };
 }
 
+/** Re-settle early birds whose +boost just ended, so their stored rate drops (accrual is split exactly at the end anyway). */
+export async function settleExpiredEarlyBirds(ctx: AppContext, now = nowSec()) {
+  const { db, t } = ctx.database;
+  const ends = earlyBirdEnds(ctx.cfg, await realAccounts(ctx));
+  const due = [...ends].filter(([, end]) => end <= now).map(([w]) => w);
+  if (!due.length) return { settled: 0 };
+  const rows = await db.select().from(t.miningAccounts).where(inArray(t.miningAccounts.wallet, due));
+  let settled = 0;
+  for (const a of rows) {
+    if (a.lastAccrualAt >= (ends.get(lc(a.wallet)) ?? 0)) continue;
+    try {
+      await settle(ctx, a.wallet, now);
+      settled++;
+    } catch (e) {
+      ctx.log.warn({ wallet: a.wallet, err: String(e) }, "early-bird expiry settle failed");
+    }
+  }
+  return { settled };
+}
+
 export function startMiningActivationTimer(ctx: AppContext) {
   if (!ctx.cfg.MINING_ACTIVATE_SWEEP_MS) return () => undefined;
   let running = false;
@@ -115,6 +138,7 @@ export function startMiningActivationTimer(ctx: AppContext) {
     running = true;
     try {
       await activateMintedCredentials(ctx);
+      await settleExpiredEarlyBirds(ctx);
     } catch (e) {
       ctx.log.error(e, "mining activation sweep failed");
     } finally {
@@ -161,20 +185,37 @@ export async function walletActivity(ctx: AppContext, wallet: string, now = nowS
   return { launches: Number(l?.n ?? 0), volumeWei: vol.toString(), volumeBnb: Number((vol * 10_000n) / WEI_PER_BNB) / 10_000, windowDays: ctx.cfg.MINING_VOLUME_WINDOW_DAYS };
 }
 
-export function computeRate(cfg: AppContext["cfg"], credit: number, act: Activity, qualifiedInvites = 0) {
+export function computeRate(cfg: AppContext["cfg"], credit: number, act: Activity, qualifiedInvites = 0, earlyBird = false) {
   const launchBoost = Math.min(cfg.MINING_LAUNCH_BOOST_CAP, act.launches * cfg.MINING_LAUNCH_BOOST);
   const volumeBoost = Math.min(cfg.MINING_VOLUME_BOOST_CAP, act.volumeBnb * cfg.MINING_VOLUME_BOOST_PER_BNB);
   // +5% per qualified invitee (minted credential, unique .ai, X ≥ 30 days, 7 check-in days), capped at +50%
   const inviteBoost = inviteBoostOf(cfg, qualifiedInvites);
-  const multiplier = 1 + launchBoost + volumeBoost + inviteBoost;
+  // 早鸟: first EARLYBIRD_SLOTS real minters, +EARLYBIRD_BOOST for EARLYBIRD_DAYS after the mint
+  const earlyBirdBoost = earlyBird && credit > 0 ? cfg.EARLYBIRD_BOOST : 0;
+  const multiplier = 1 + launchBoost + volumeBoost + inviteBoost + earlyBirdBoost;
   const base = (credit / 1000) * cfg.MINING_POINTS_PER_1000_CREDIT_DAY;
   const rateE8 = Math.round(base * multiplier * E8);
-  return { basePerDay: base, launchBoost, volumeBoost, inviteBoost, multiplier, rateE8 };
+  return { basePerDay: base, launchBoost, volumeBoost, inviteBoost, earlyBirdBoost, multiplier, rateE8 };
 }
 
 type Account = typeof import("../db/schema.sqlite.js").miningAccounts.$inferSelect;
 
-const liveE8 = (a: Account, now: number) => a.pointsE8 + Math.floor((a.rateE8PerDay * Math.max(0, now - a.lastAccrualAt)) / DAY);
+/**
+ * Settled points + accrual since the last settle. When an early bird's boost ended in between (`ebEnd`), the interval
+ * is split there: the stored rate up to ebEnd, the rate without the early-bird share after it.
+ */
+function liveE8(cfg: AppContext["cfg"], a: Account, now: number, ebEnd?: number | null) {
+  const last = a.lastAccrualAt;
+  if (ebEnd && last < ebEnd && now > ebEnd) {
+    const base = (a.credit / 1000) * cfg.MINING_POINTS_PER_1000_CREDIT_DAY * E8;
+    const bonus = Math.round(base * cfg.EARLYBIRD_BOOST);
+    if (a.rateE8PerDay >= Math.round(base) + bonus - 1) {
+      const after = Math.max(0, a.rateE8PerDay - bonus);
+      return a.pointsE8 + Math.floor((a.rateE8PerDay * (ebEnd - last)) / DAY) + Math.floor((after * (now - ebEnd)) / DAY);
+    }
+  }
+  return a.pointsE8 + Math.floor((a.rateE8PerDay * Math.max(0, now - last)) / DAY);
+}
 
 /** Settle accrual up to `now` and switch to the current rate. Returns the (possibly new) account row or null. */
 async function settle(ctx: AppContext, wallet: string, now: number) {
@@ -183,24 +224,26 @@ async function settle(ctx: AppContext, wallet: string, now: number) {
   const credit = cred.active ? cred.credit : 0;
   const act = await walletActivity(ctx, wallet, now);
   const invites = credit > 0 ? await qualifiedInviteCount(ctx, wallet, now) : { invited: 0, qualified: 0 };
-  const rate = computeRate(ctx.cfg, credit, act, invites.qualified);
+  const eb: EarlyBird = await earlyBirdOf(ctx, wallet, now);
+  const rate = computeRate(ctx.cfg, credit, act, invites.qualified, eb.active);
   for (let attempt = 0; attempt < 3; attempt++) {
     const [a] = await db.select().from(t.miningAccounts).where(eq(t.miningAccounts.wallet, wallet));
     if (!a) {
-      if (credit <= 0) return { account: null, cred, act, rate, invites };
+      if (credit <= 0) return { account: null, cred, act, rate, invites, eb };
       const row = { wallet, pointsE8: 0, checkinE8: 0, rateE8PerDay: rate.rateE8, credit, lastAccrualAt: now, createdAt: now, updatedAt: now };
       const ins = await db.insert(t.miningAccounts).values(row).onConflictDoNothing().returning();
-      if (ins.length) return { account: ins[0] as Account, cred, act, rate, invites };
+      if (ins.length) clearEarlyBirdCache();
+      if (ins.length) return { account: ins[0] as Account, cred, act, rate, invites, eb };
       continue; // raced with another settle → reload
     }
-    const pointsE8 = liveE8(a, now);
+    const pointsE8 = liveE8(ctx.cfg, a, now, eb.endsAt);
     // optimistic lock on lastAccrualAt so concurrent settles never accrue the same interval twice
     const upd = await db
       .update(t.miningAccounts)
       .set({ pointsE8, rateE8PerDay: rate.rateE8, credit, lastAccrualAt: Math.max(now, a.lastAccrualAt), updatedAt: now })
       .where(and(eq(t.miningAccounts.wallet, wallet), eq(t.miningAccounts.lastAccrualAt, a.lastAccrualAt)))
       .returning();
-    if (upd.length) return { account: upd[0] as Account, cred, act, rate, invites };
+    if (upd.length) return { account: upd[0] as Account, cred, act, rate, invites, eb };
   }
   throw new ApiError(503, "busy", "请稍后再试");
 }
@@ -208,7 +251,7 @@ async function settle(ctx: AppContext, wallet: string, now: number) {
 export async function getMining(ctx: AppContext, walletIn: string) {
   const wallet = normalizeWallet(walletIn);
   const now = nowSec();
-  const { account, cred, act, rate, invites } = await settle(ctx, wallet, now);
+  const { account, cred, act, rate, invites, eb } = await settle(ctx, wallet, now);
   const { db, t } = ctx.database;
   const today = utcDay(now);
   const [ci] = await db.select().from(t.miningCheckins).where(and(eq(t.miningCheckins.wallet, wallet), eq(t.miningCheckins.day, today)));
@@ -234,6 +277,8 @@ export async function getMining(ctx: AppContext, walletIn: string) {
       invited: invites.invited,
       qualifiedInvites: invites.qualified,
       inviteBoost: rate.inviteBoost,
+      earlyBird: { slot: eb.slot, eligible: eb.eligible, active: eb.active && rate.earlyBirdBoost > 0, boost: rate.earlyBirdBoost, startsAt: eb.startsAt, endsAt: eb.endsAt },
+      earlyBirdBoost: rate.earlyBirdBoost,
     },
     miningSince: account?.createdAt ?? null,
     checkin: {
@@ -293,9 +338,10 @@ export async function miningLeaderboard(ctx: AppContext, limit = 50) {
   const { db, t } = ctx.database;
   const now = nowSec();
   const rows = await db.select().from(t.miningAccounts).orderBy(desc(t.miningAccounts.pointsE8)).limit(Math.max(limit * 4, 200));
+  const ends = earlyBirdEnds(ctx.cfg, await realAccounts(ctx));
   const ranked = rows
     .filter((a) => !isHiddenWallet(ctx.cfg, a.wallet))
-    .map((a) => ({ wallet: checksum(a.wallet), e8: liveE8(a as Account, now), ratePerDay: a.rateE8PerDay / E8, credit: a.credit }))
+    .map((a) => ({ wallet: checksum(a.wallet), e8: liveE8(ctx.cfg, a as Account, now, ends.get(lc(a.wallet))), ratePerDay: a.rateE8PerDay / E8, credit: a.credit }))
     .sort((x, y) => y.e8 - x.e8)
     .slice(0, limit);
   const names = ranked.length
@@ -308,20 +354,26 @@ export async function miningStats(ctx: AppContext) {
   const { db, t } = ctx.database;
   const now = nowSec();
   const rows = (await db.select().from(t.miningAccounts)).filter((a) => !isHiddenWallet(ctx.cfg, a.wallet));
+  const ends = earlyBirdEnds(ctx.cfg, await realAccounts(ctx));
   let total = 0;
   let active = 0;
   for (const a of rows) {
-    total += liveE8(a as Account, now);
+    total += liveE8(ctx.cfg, a as Account, now, ends.get(lc(a.wallet)));
     if (a.rateE8PerDay > 0) active++;
   }
   const [ci] = await db.select({ n: count() }).from(t.miningCheckins).where(eq(t.miningCheckins.day, utcDay(now)));
   const c = ctx.cfg;
+  // small numbers are withheld (null) until MINING_STATS_MIN_PARTICIPANTS real participants: never padded or estimated
+  const statsVisible = rows.length >= c.MINING_STATS_MIN_PARTICIPANTS;
   return {
     asOf: now,
-    participants: rows.length,
-    activeMiners: active,
-    totalPoints: fmtE8(total),
-    checkinsToday: Number(ci?.n ?? 0),
+    statsVisible,
+    statsMinParticipants: c.MINING_STATS_MIN_PARTICIPANTS,
+    participants: statsVisible ? rows.length : null,
+    activeMiners: statsVisible ? active : null,
+    totalPoints: statsVisible ? fmtE8(total) : null,
+    checkinsToday: statsVisible ? Number(ci?.n ?? 0) : null,
+    earlyBird: await earlyBirdSummary(ctx, now),
     credentialConfigured: credentialAddresses(c).length > 0,
     credentialAddress: credentialMintAddress(c),
     credentialAddresses: credentialAddresses(c),
@@ -335,6 +387,10 @@ export async function miningStats(ctx: AppContext) {
       checkinPoints: c.MINING_CHECKIN_POINTS,
       inviteBoostPerInvitee: c.INVITE_BOOST_PER_INVITEE,
       inviteBoostCap: c.INVITE_BOOST_CAP,
+      earlyBirdBoost: c.EARLYBIRD_BOOST,
+      earlyBirdSlots: c.EARLYBIRD_SLOTS,
+      earlyBirdDays: c.EARLYBIRD_DAYS,
+      maxMultiplier: 1 + c.MINING_LAUNCH_BOOST_CAP + c.MINING_VOLUME_BOOST_CAP + c.INVITE_BOOST_CAP + c.EARLYBIRD_BOOST,
       note: "积分将按规则兑换平台币，具体比例与时间另行公告，不承诺收益",
     },
   };

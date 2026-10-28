@@ -13,6 +13,10 @@ import { rewardsFor, runRewardEpoch, epochOf } from "../services/rewards.js";
 import { listClusters, removeAgent, revokeLaunch, runSybilScan } from "../services/sybil.js";
 import { requalifyAgents } from "../services/requalify.js";
 import { sendAdminTx } from "../services/adminTx.js";
+import { fullHealth, indexerStatus, rewardsStatus, signerStatus } from "../services/health.js";
+import { reconcileNftHoldings } from "../services/reconcile.js";
+import { earlyBirdSummary } from "../services/earlybird.js";
+import { settleExpiredEarlyBirds } from "../services/mining.js";
 import { adminLaunchVoucher } from "../services/launchVoucher.js";
 import { Indexer, clockNow } from "../services/indexer.js";
 import { isAddr, jsonStringify, lc } from "../lib/util.js";
@@ -90,13 +94,32 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   };
   const health = async (req: FastifyRequest<{ Querystring: Record<string, string> }>) => {
     const block = await ctx.pc.getBlockNumber().catch(() => null);
-    const base = { ok: true, chainId: ctx.cfg.CHAIN_ID, block, db: ctx.database.dialect, contracts: ctx.addresses, txSendEnabled: ctx.cfg.TX_SEND_ENABLED, backup: { enabled: !!ctx.cfg.HF_TOKEN, lastOkAt: await lastBackupAt(ctx).catch(() => null) } };
+    const [signer, indexer, rewards] = await Promise.all([
+      signerStatus(ctx),
+      indexerStatus(ctx, block),
+      rewardsStatus(ctx).catch(() => null),
+    ]);
+    const base = {
+      ok: true, chainId: ctx.cfg.CHAIN_ID, block, db: ctx.database.dialect, contracts: ctx.addresses, txSendEnabled: ctx.cfg.TX_SEND_ENABLED,
+      autoSubmitAdminTxs: ctx.cfg.AUTO_SUBMIT_ADMIN_TXS,
+      backup: { enabled: !!ctx.cfg.HF_TOKEN, lastOkAt: await lastBackupAt(ctx).catch(() => null) },
+      signerLow: signer.low, // alert flag: platform signer BNB below SIGNER_LOW_BALANCE_BNB
+      signer,
+      indexer,
+      rewards,
+    };
     const deep = req.query?.deep;
     if (deep === "1" || deep === "true") return { ...base, onchain: await onchain() };
     return base;
   };
   app.get<{ Querystring: Record<string, string> }>("/health", health);
   app.get<{ Querystring: Record<string, string> }>("/v1/health", health); // platform health checks (render.yaml / fly.toml)
+  // uptime pollers: one JSON with ok flags (backend / db / rpc / indexer lag / site / signer balance / rewards)
+  app.get<{ Querystring: Record<string, string> }>("/v1/health/full", async (req, reply) => {
+    const r = await fullHealth(ctx);
+    if (!r.ok && (req.query?.strict === "1" || req.query?.strict === "true")) reply.status(503);
+    return r;
+  });
 
   // ------------------------------------------------------------------ registration
   app.post("/v1/register/challenge", async (req) => {
@@ -209,6 +232,12 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
     const b = parse(z.object({ agentId: z.string().min(4), expiryHours: z.number().int().optional(), deadlineMin: z.number().int().optional() }), req.body ?? {});
     return adminLaunchVoucher(ctx, addrParam(req.params.wallet), b.agentId, { expiryHours: b.expiryHours, deadlineMin: b.deadlineMin });
   });
+  // admin status: signer balance alert, indexer, rewards, early bird, pending admin txs
+  app.get("/v1/admin/status", async (req) => {
+    admin(req);
+    const [full, earlyBird] = await Promise.all([fullHealth(ctx), earlyBirdSummary(ctx, Math.floor(Date.now() / 1000))]);
+    return { ...full, earlyBird, signerFresh: await signerStatus(ctx, true) };
+  });
   app.get("/v1/admin/txs", async (req) => {
     admin(req);
     const { db, t } = ctx.database;
@@ -235,8 +264,12 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
         return requalifyAgents(ctx, { now: body.now as number | undefined, force: !!body.force });
       case "sybil":
         return runSybilScan(ctx);
+      case "reconcile-nfts":
+        return reconcileNftHoldings(ctx, { project: body.project as string | undefined, dryRun: !!body.dryRun });
+      case "earlybird-expiry":
+        return settleExpiredEarlyBirds(ctx);
       default:
-        throw new ApiError(404, "unknown_job", "jobs: index | promotion | rewards | requalify | sybil");
+        throw new ApiError(404, "unknown_job", "jobs: index | promotion | rewards | requalify | sybil | reconcile-nfts | earlybird-expiry");
     }
   });
 

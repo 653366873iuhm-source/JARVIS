@@ -79,7 +79,7 @@ beforeAll(async () => {
   ctx = {
     cfg: loadConfig({
       NODE_ENV: "test", ADMIN_TOKEN: "t", AIRDROP_PINNED_TWEET_ID: PINNED, AIRDROP_AUTO_APPROVE: "true", INVITE_MAX_PER_INVITER: "3",
-      PUBLIC_APP_URL: "https://chyai.example", MINING_ACTIVATE_SWEEP_MS: "0",
+      PUBLIC_APP_URL: "https://chyai.example", MINING_ACTIVATE_SWEEP_MS: "0", EARLYBIRD_SLOTS: "0", MINING_STATS_MIN_PARTICIPANTS: "0",
     }),
     database, resolver, x, bus: new EventEmitter(), log: { info() {}, warn() {}, error() {}, debug() {} },
   } as unknown as AppContext;
