@@ -9,7 +9,8 @@ import { openDatabase, type Database } from "../../src/db/index.js";
 import { loadConfig } from "../../src/config.js";
 import { buildServer } from "../../src/api/server.js";
 import type { AppContext } from "../../src/context.js";
-import { normalizeXHandle } from "../../src/services/airdrop.js";
+import { normalizeAgentName, normalizeRepostUrl, normalizeXHandle } from "../../src/services/airdrop.js";
+import { MockAgentIdResolver } from "../../src/providers/agentid/index.js";
 
 const A = (n: number) => "0x" + n.toString(16).padStart(40, "0");
 const TOKEN = "test-admin-token";
@@ -17,9 +18,18 @@ let database: Database;
 let app: FastifyInstance;
 let dbFile: string;
 let ipSeq = 0;
+let nameSeq = 0;
+const resolver = new MockAgentIdResolver();
+// fills the v2 fields (.ai name resolving to the wallet + a repost URL) unless the test passes its own
+const withV2 = (body: any) => {
+  if (!body || typeof body !== "object" || "agentName" in body || typeof body.xHandle !== "string" || typeof body.wallet !== "string") return body;
+  const agentName = `agent${++nameSeq}.ai`;
+  resolver.set(agentName, body.wallet as any);
+  return { ...body, agentName, repostUrl: "https://x.com/i/status/1234567890123" };
+};
 // each request gets its own client IP so the per-IP limiter (5 / 10 min) never interferes
 const claim = async (body: unknown) => {
-  const r = await app.inject({ method: "POST", url: "/v1/airdrop/claim", payload: body as any, headers: { "x-forwarded-for": `10.0.0.${++ipSeq}` } });
+  const r = await app.inject({ method: "POST", url: "/v1/airdrop/claim", payload: withV2(body), headers: { "x-forwarded-for": `10.0.0.${++ipSeq}` } });
   return { status: r.statusCode, body: JSON.parse(r.body) };
 };
 const get = async (url: string, headers: Record<string, string> = {}) => app.inject({ method: "GET", url, headers });
@@ -30,6 +40,7 @@ beforeAll(async () => {
   const ctx = {
     cfg: loadConfig({ NODE_ENV: "test", PLATFORM_ADDRESSES: A(0xff), ADMIN_TOKEN: TOKEN }),
     database,
+    resolver,
     bus: new EventEmitter(),
     log: { info() {}, warn() {}, error() {}, debug() {} },
   } as unknown as AppContext;
@@ -45,6 +56,19 @@ afterAll(async () => {
 describe("normalizeXHandle", () => {
   it("strips @ / url forms and lowercases", () => {
     for (const v of ["Alice_01", "@Alice_01", "x.com/Alice_01", "https://twitter.com/Alice_01?s=20", "https://www.x.com/ALICE_01/"]) expect(normalizeXHandle(v)).toBe("alice_01");
+  });
+});
+
+describe("normalizeAgentName / normalizeRepostUrl", () => {
+  it("normalizes .ai names", () => {
+    for (const v of ["Alice.ai", "alice", " @alice.AI "]) expect(normalizeAgentName(v)).toBe("alice.ai");
+    for (const v of ["al", "a-b.ai", "toolongname_toolong.ai", "", "alice.bnb"]) expect(() => normalizeAgentName(v)).toThrow();
+  });
+  it("canonicalizes repost URLs and checks the author", () => {
+    expect(normalizeRepostUrl("https://twitter.com/Bob/status/1234567890?s=20", "bob")).toBe("https://x.com/bob/status/1234567890");
+    expect(normalizeRepostUrl("x.com/i/status/1234567890", "bob")).toBe("https://x.com/bob/status/1234567890");
+    expect(() => normalizeRepostUrl("https://x.com/eve/status/1234567890", "bob")).toThrow(/eve/);
+    expect(() => normalizeRepostUrl("1234567890", "bob")).toThrow();
   });
 });
 
@@ -111,9 +135,9 @@ describe("airdrop routes", () => {
     expect(csv.statusCode).toBe(200);
     expect(csv.headers["content-type"]).toContain("text/csv");
     const lines = csv.body.trim().split("\n");
-    expect(lines[0]).toBe("id,x_handle,x_url,wallet,amount,status,created_at_utc");
+    expect(lines[0]).toBe("id,x_handle,x_url,wallet,agent_id,repost_url,amount,status,created_at_utc");
     expect(lines.length).toBe(3);
-    expect(csv.body).toContain(`alice_01,https://x.com/alice_01,${A(0xa1)},1000,pending_verification`);
+    expect(csv.body).toContain(`alice_01,https://x.com/alice_01,${A(0xa1)},agent1.ai,https://x.com/alice_01/status/1234567890123,1000,pending_verification`);
     const js = await get("/v1/airdrop/claims?format=json", { authorization: `Bearer ${TOKEN}` });
     expect(js.statusCode).toBe(200);
     const rows = JSON.parse(js.body);

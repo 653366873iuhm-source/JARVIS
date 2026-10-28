@@ -106,11 +106,28 @@ export const ConfigSchema = z.object({
   CHALLENGE_TTL_MIN: num(30),
 
   // ---- Agent ID (.ai) resolver
-  AGENTID_PROVIDER: z.enum(["binance-http", "binance-cli", "mock"]).default("mock"),
+  // spaceid = public on-chain read of the SPACE ID Agent ID registry (no login; recommended for production)
+  AGENTID_PROVIDER: z.enum(["spaceid", "binance-http", "binance-cli", "mock"]).default("mock"),
+  SPACEID_AGENT_REGISTRY: addr.default("0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F"),
   BINANCE_API_BASE: z.string().default("https://www.binance.com"),
   BINANCE_AGENT_SESSION_ID: z.string().optional(),
   BINANCE_CHAIN_ID: z.string().default("56"),
   BAW_BIN: z.string().default("baw"),
+
+  // ---- ChyAI airdrop credential (soulbound ChyAICredential). Unset = not deployed: no vouchers, nobody mines.
+  CREDENTIAL_ADDRESS: addr.optional(),
+  CREDENTIAL_VOUCHER_TTL_SEC: num(86400),
+  AIRDROP_REGISTRATION_EXPIRY_DAYS: num(365), // expiry of the AgentRegistry entry issued with an approved claim
+
+  // ---- 挖矿积分 (off-chain mining points)
+  MINING_POINTS_PER_1000_CREDIT_DAY: num(10), // base: 1000 credit -> 10 pts/day (linear in credit)
+  MINING_LAUNCH_BOOST: num(0.2), // +20% per project launched by the wallet
+  MINING_LAUNCH_BOOST_CAP: num(1), // launch boost capped at +100%
+  MINING_VOLUME_BOOST_PER_BNB: num(0.1), // +10% per BNB of curve buy/sell volume in the window
+  MINING_VOLUME_BOOST_CAP: num(2), // volume boost capped at +200%
+  MINING_VOLUME_WINDOW_DAYS: num(7),
+  MINING_CHECKIN_POINTS: num(5), // daily 签到 points
+  MINING_CREDIT_CACHE_SEC: num(60), // cache of on-chain creditOf reads
 
   // ---- promotion gate
   PROMO_POLL_MS: num(30000),

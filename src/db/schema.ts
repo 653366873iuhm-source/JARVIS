@@ -298,14 +298,51 @@ export function defineSchema(b: Builders) {
       amount: int("amount").notNull(), // NFT 凭证额度 (credits), not a token
       status: text("status").notNull(), // pending_verification | approved | rejected
       ipHash: text("ip_hash"), // HMAC of client IP (rate-limit audit; raw IP never stored)
+      repostUrl: text("repost_url"), // URL of the user's repost / quote of the pinned post (v2 claims)
+      agentId: text("agent_id"), // Binance Agent ID, e.g. "alice.ai" (lowercased; resolved on-chain to `wallet`)
       createdAt: int("created_at").notNull(),
       updatedAt: int("updated_at").notNull(),
     },
-    (t) => [uniqueIndex("airdrop_handle_uq").on(t.xHandle), uniqueIndex("airdrop_wallet_uq").on(t.wallet), index("airdrop_created_idx").on(t.createdAt)],
+    (t) => [
+      uniqueIndex("airdrop_handle_uq").on(t.xHandle),
+      uniqueIndex("airdrop_wallet_uq").on(t.wallet),
+      uniqueIndex("airdrop_agent_uq").on(t.agentId),
+      index("airdrop_created_idx").on(t.createdAt),
+    ],
+  );
+
+  // 挖矿积分 (off-chain mining points; convertible to the platform token later under rules announced separately).
+  // Points are stored in milli-points (integer). Accrual is settled lazily: points += rate * elapsed since lastAccrualAt.
+  const miningAccounts = table(
+    "mining_accounts",
+    {
+      wallet: text("wallet").primaryKey(), // lowercase 0x address
+      pointsMilli: int("points_milli").notNull().default(0), // settled points (accrual + check-ins), x1000
+      checkinMilli: int("checkin_milli").notNull().default(0), // part of pointsMilli from check-ins
+      rateMilliPerDay: int("rate_milli_per_day").notNull().default(0), // rate in force since lastAccrualAt, x1000
+      credit: int("credit").notNull().default(0), // ChyAICredential.creditOf at last settle
+      lastAccrualAt: int("last_accrual_at").notNull(),
+      createdAt: int("created_at").notNull(),
+      updatedAt: int("updated_at").notNull(),
+    },
+    (t) => [index("mining_points_idx").on(t.pointsMilli)],
+  );
+  const miningCheckins = table(
+    "mining_checkins",
+    {
+      id: text("id").primaryKey(),
+      wallet: text("wallet").notNull(),
+      day: text("day").notNull(), // UTC YYYY-MM-DD
+      pointsMilli: int("points_milli").notNull(),
+      createdAt: int("created_at").notNull(),
+    },
+    (t) => [uniqueIndex("mining_checkin_uq").on(t.wallet, t.day), index("mining_checkin_day_idx").on(t.day)],
   );
 
   return {
     airdropClaims,
+    miningAccounts,
+    miningCheckins,
     kv,
     agents,
     challenges,

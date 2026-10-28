@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../../context.js";
 import { ApiError } from "../../services/registration.js";
-import { AIRDROP_STATUSES, RateLimiter, airdropClaimsCsv, airdropStats, claimAirdrop, listAirdropClaims, setAirdropStatus, type AirdropStatus } from "../../services/airdrop.js";
+import { issueCredentialVoucher } from "../../services/credential.js";
+import { AIRDROP_STATUSES, RateLimiter, airdropClaimsCsv, airdropStats, airdropStatus, claimAirdrop, listAirdropClaims, setAirdropStatus, type AirdropStatus } from "../../services/airdrop.js";
 
 /** Client IP behind Render/Cloudflare: cf-connecting-ip, else first X-Forwarded-For hop, else socket address. */
 export function clientIp(req: FastifyRequest): string {
@@ -25,9 +26,26 @@ export function registerAirdropRoutes(app: FastifyInstance, ctx: AppContext, adm
       throw new ApiError(429, "rate_limited", "请求太频繁，请稍后再试");
     }
     const b = (req.body ?? {}) as Record<string, unknown>;
-    if (typeof b.xHandle !== "string" || typeof b.wallet !== "string") throw new ApiError(400, "validation_error", "xHandle and wallet are required strings");
-    const r = await claimAirdrop(ctx, { xHandle: b.xHandle, wallet: b.wallet }, ip);
+    for (const k of ["xHandle", "wallet", "repostUrl", "agentName"])
+      if (typeof b[k] !== "string") throw new ApiError(400, "validation_error", "xHandle, wallet, repostUrl and agentName are required strings");
+    const r = await claimAirdrop(ctx, { xHandle: b.xHandle as string, wallet: b.wallet as string, repostUrl: b.repostUrl as string, agentName: b.agentName as string }, ip);
     return reply.status(201).send(r);
+  });
+
+  // public: claim status of a wallet (+ on-chain credential state)
+  app.get<{ Querystring: { wallet?: string } }>("/v1/airdrop/status", async (req) => airdropStatus(ctx, String(req.query.wallet ?? "")));
+
+  // public: mint voucher (+ AgentRegistry registration when needed) for an APPROVED claim. Nothing is broadcast:
+  // the wallet submits the returned calldata itself (gas paid by the user). Vouchers only work for msg.sender == wallet.
+  const voucherIp = new RateLimiter(20, 10 * 60_000);
+  app.get<{ Querystring: { wallet?: string } }>("/v1/airdrop/voucher", async (req, reply) => {
+    if (!voucherIp.take(clientIp(req))) {
+      reply.header("retry-after", "600");
+      throw new ApiError(429, "rate_limited", "请求太频繁，请稍后再试");
+    }
+    const w = String(req.query.wallet ?? "");
+    if (!/^0x[0-9a-fA-F]{40}$/.test(w)) throw new ApiError(400, "invalid_wallet", "wallet query parameter required");
+    return issueCredentialVoucher(ctx, w);
   });
 
   // admin: CSV export (default) or JSON with ?format=json

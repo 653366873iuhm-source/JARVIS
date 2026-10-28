@@ -88,3 +88,55 @@ export class MockAgentIdResolver implements AgentIdResolver {
     return this.map.get(agentId.toLowerCase()) ?? null;
   }
 }
+
+/** SPACE ID "Agent ID" HandleRegistry on BSC — the soulbound ERC-721 behind Binance .ai names (verified on Sourcify). */
+export const SPACEID_AGENT_REGISTRY_BSC = "0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F" as const;
+export const SpaceIdHandleRegistryAbi = [
+  { type: "function", name: "ownerOfHandle", stateMutability: "view", inputs: [{ name: "handle", type: "string" }], outputs: [{ type: "address" }] },
+  { type: "function", name: "handleOf", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ type: "string" }] },
+  { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "owner", type: "address" }], outputs: [{ type: "uint256" }] },
+] as const;
+
+/** "Alice.ai" / "alice" → "alice" (the registry stores the bare label: 3–20 chars of [a-z0-9]). */
+export function agentIdLabel(agentId: string): string | null {
+  const s = String(agentId ?? "").trim().toLowerCase().replace(/\.ai$/, "");
+  return /^[a-z0-9]{1,64}$/.test(s) ? s : null;
+}
+
+type ReadClient = {
+  readContract(args: { address: Address; abi: typeof SpaceIdHandleRegistryAbi; functionName: "ownerOfHandle" | "handleOf"; args: readonly [string] | readonly [Address] }): Promise<unknown>;
+  getCode?(args: { address: Address }): Promise<string | undefined>;
+};
+
+/**
+ * Public, login-free resolution straight from chain: `ownerOfHandle(label)` on the SPACE ID Agent ID registry.
+ * The token is soulbound and one-per-wallet (handleOf[wallet] is permanent), so name ↔ wallet is a fixed binding;
+ * no Binance session needed. isFallback is always false (the record is native to BSC).
+ */
+export class SpaceIdOnchainResolver implements AgentIdResolver {
+  constructor(private pc: ReadClient, private registry: Address = SPACEID_AGENT_REGISTRY_BSC) {}
+  async resolve(agentId: string): Promise<ResolvedAgentId | null> {
+    const label = agentIdLabel(agentId);
+    if (!label) return null;
+    let owner: string;
+    try {
+      owner = String(await this.pc.readContract({ address: this.registry, abi: SpaceIdHandleRegistryAbi, functionName: "ownerOfHandle", args: [label] as const }));
+    } catch (e: any) {
+      throw new AgentIdResolveError(`Agent ID registry read failed: ${e?.shortMessage ?? e?.message ?? e}`);
+    }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(owner) || /^0x0{40}$/i.test(owner)) return null;
+    let addressType = "UNKNOWN";
+    try {
+      const code = this.pc.getCode ? await this.pc.getCode({ address: owner as Address }) : undefined;
+      addressType = code && code !== "0x" ? "CONTRACT" : code === undefined ? "UNKNOWN" : "EOA";
+    } catch {
+      /* type is informational only */
+    }
+    return { address: owner as Address, addressType, isFallback: false };
+  }
+  /** Reverse lookup: the .ai name a wallet holds ("" → none). */
+  async nameOf(wallet: Address): Promise<string | null> {
+    const h = String(await this.pc.readContract({ address: this.registry, abi: SpaceIdHandleRegistryAbi, functionName: "handleOf", args: [wallet] as const }));
+    return h ? `${h}.ai` : null;
+  }
+}

@@ -8,7 +8,7 @@ import { createPlatformSigner, createRelayer } from "./signer/factory.js";
 import type { XProvider } from "./providers/x/types.js";
 import { FxTwitterProvider } from "./providers/x/fxtwitter.js";
 import { MockXProvider } from "./providers/x/mock.js";
-import { BinanceCliResolver, BinanceHttpResolver, MockAgentIdResolver, type AgentIdResolver } from "./providers/agentid/index.js";
+import { BinanceCliResolver, BinanceHttpResolver, MockAgentIdResolver, SpaceIdOnchainResolver, type AgentIdResolver } from "./providers/agentid/index.js";
 import { EtherscanFundingProvider, MockFundingProvider, RpcScanFundingProvider, type FundingSourceProvider } from "./providers/funding/index.js";
 
 export interface Logger {
@@ -68,7 +68,9 @@ export async function createContext(cfg: Config, o: ContextOverrides = {}): Prom
       : new MockXProvider());
   const resolver =
     o.resolver ??
-    (cfg.AGENTID_PROVIDER === "binance-http"
+    (cfg.AGENTID_PROVIDER === "spaceid"
+      ? new SpaceIdOnchainResolver(pc as any, cfg.SPACEID_AGENT_REGISTRY as `0x${string}`)
+      : cfg.AGENTID_PROVIDER === "binance-http"
       ? new BinanceHttpResolver(cfg.BINANCE_API_BASE, cfg.BINANCE_CHAIN_ID, cfg.BINANCE_AGENT_SESSION_ID)
       : cfg.AGENTID_PROVIDER === "binance-cli"
         ? new BinanceCliResolver(cfg.BAW_BIN, cfg.BINANCE_CHAIN_ID)

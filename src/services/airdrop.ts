@@ -9,7 +9,9 @@ import crypto from "node:crypto";
 import { count, desc, eq, or } from "drizzle-orm";
 import type { AppContext } from "../context.js";
 import { ApiError } from "./registration.js";
-import { isAddr, lc, nowSec, uuid } from "../lib/util.js";
+import { isAddressEqual } from "viem";
+import { checksum, isAddr, lc, nowSec, parseTweetId, uuid } from "../lib/util.js";
+import { readCredential } from "./credential.js";
 
 export const AIRDROP_AMOUNT = 1000;
 export const AIRDROP_STATUSES = ["pending_verification", "approved", "rejected"] as const;
@@ -29,6 +31,23 @@ export function normalizeWallet(input: string): string {
   if (!isAddr(w)) throw new ApiError(400, "invalid_wallet", "BSC 钱包地址格式不正确（0x 开头 40 位十六进制）");
   if (/^0x0{40}$/i.test(w)) throw new ApiError(400, "invalid_wallet", "不能使用零地址");
   return lc(w);
+}
+
+/** "Alice.ai" / "alice" / "@alice.ai" → "alice.ai" (SPACE ID Agent ID label: 3–20 lowercase letters / digits). */
+export function normalizeAgentName(input: string): string {
+  const s = String(input ?? "").trim().toLowerCase().replace(/^@+/, "").replace(/\.ai$/, "");
+  if (!/^[a-z0-9]{3,20}$/.test(s)) throw new ApiError(400, "invalid_agent_id", ".ai 名称格式不正确（3–20 位小写字母或数字，例如 alice.ai）");
+  return `${s}.ai`;
+}
+/** X post URL of the user's repost / quote of the pinned post → "https://x.com/<user>/status/<id>". */
+export function normalizeRepostUrl(input: string, xHandle: string): string {
+  const s = String(input ?? "").trim();
+  const id = /^https?:\/\//i.test(s) || /(?:x|twitter)\.com\//i.test(s) ? parseTweetId(s) : null;
+  if (!id) throw new ApiError(400, "invalid_repost_url", "转发链接格式不正确（需要 x.com/<用户名>/status/<编号> 形式的帖子链接）");
+  const m = s.match(/(?:x|twitter)\.com\/([^/?#\s]+)\/status/i);
+  const user = m?.[1]?.toLowerCase();
+  if (user && user !== "i" && user !== xHandle) throw new ApiError(422, "repost_wrong_author", `转发链接属于 @${user}，不是 @${xHandle}`);
+  return `https://x.com/${xHandle}/status/${id}`;
 }
 
 /** Small in-memory sliding-window limiter (per process; good enough for a single free instance). */
@@ -56,18 +75,44 @@ export async function airdropStats(ctx: AppContext) {
   return { claimed: Number(r?.n ?? 0), amountPerClaim: AIRDROP_AMOUNT };
 }
 
-export async function claimAirdrop(ctx: AppContext, body: { xHandle: string; wallet: string }, ip = "") {
+export interface ClaimInput {
+  xHandle: string;
+  wallet: string;
+  repostUrl: string;
+  agentName: string;
+}
+
+export async function claimAirdrop(ctx: AppContext, body: ClaimInput, ip = "") {
   const xHandle = normalizeXHandle(body.xHandle);
   const wallet = normalizeWallet(body.wallet);
+  const agentId = normalizeAgentName(body.agentName);
+  const repostUrl = normalizeRepostUrl(body.repostUrl, xHandle);
   const { db, t } = ctx.database;
   const dupe = async () => {
-    const rows = await db.select().from(t.airdropClaims).where(or(eq(t.airdropClaims.xHandle, xHandle), eq(t.airdropClaims.wallet, wallet)));
+    const rows = await db
+      .select()
+      .from(t.airdropClaims)
+      .where(or(eq(t.airdropClaims.xHandle, xHandle), eq(t.airdropClaims.wallet, wallet), eq(t.airdropClaims.agentId, agentId)));
     if (rows.some((r) => r.xHandle === xHandle)) throw new ApiError(409, "handle_already_claimed", "该推特账号已经领取过（一个推特号只能领一份）");
     if (rows.some((r) => r.wallet === wallet)) throw new ApiError(409, "wallet_already_claimed", "该钱包已经领取过（同一钱包只能领一份）");
+    if (rows.some((r) => r.agentId === agentId)) throw new ApiError(409, "agent_id_already_claimed", "该 .ai Agent ID 已经领取过");
   };
   await dupe();
+  // the .ai name must resolve (on-chain Agent ID registry) to exactly the submitted wallet
+  let resolved;
+  try {
+    resolved = await ctx.resolver.resolve(agentId);
+  } catch (e: any) {
+    throw new ApiError(503, "agent_id_unavailable", `暂时无法查询 Agent ID，请稍后再试（${e?.message ?? e}）`);
+  }
+  if (!resolved) throw new ApiError(422, "agent_id_unresolved", `${agentId} 不存在或未绑定 BSC 地址（仅限持有 Binance Agent ID 的钱包）`);
+  if (resolved.isFallback || !isAddressEqual(resolved.address, checksum(wallet)))
+    throw new ApiError(422, "agent_id_mismatch", `${agentId} 属于 ${resolved.address}，不是你填写的钱包`);
   const now = nowSec();
-  const row = { id: uuid(), xHandle, wallet, amount: AIRDROP_AMOUNT, status: "pending_verification", ipHash: ip ? ipHash(ctx, ip) : null, createdAt: now, updatedAt: now };
+  const row = {
+    id: uuid(), xHandle, wallet, amount: AIRDROP_AMOUNT, status: "pending_verification", ipHash: ip ? ipHash(ctx, ip) : null,
+    repostUrl, agentId, createdAt: now, updatedAt: now,
+  };
   try {
     await db.insert(t.airdropClaims).values(row);
   } catch (e) {
@@ -75,7 +120,25 @@ export async function claimAirdrop(ctx: AppContext, body: { xHandle: string; wal
     throw e;
   }
   const { claimed } = await airdropStats(ctx);
-  return { id: row.id, xHandle, wallet, amount: AIRDROP_AMOUNT, status: row.status as AirdropStatus, createdAt: now, claimed };
+  return { id: row.id, xHandle, wallet, agentId, repostUrl, amount: AIRDROP_AMOUNT, status: row.status as AirdropStatus, createdAt: now, claimed };
+}
+
+/** Public status of a wallet's claim (no IP hash), plus on-chain credential state. */
+export async function airdropStatus(ctx: AppContext, walletIn: string) {
+  const wallet = normalizeWallet(walletIn);
+  const { db, t } = ctx.database;
+  const [r] = await db.select().from(t.airdropClaims).where(eq(t.airdropClaims.wallet, wallet));
+  let credential = null;
+  try {
+    credential = await readCredential(ctx, wallet);
+  } catch {
+    credential = null;
+  }
+  if (!r) return { wallet, claimed: false, credential };
+  return {
+    wallet, claimed: true, id: r.id, xHandle: r.xHandle, agentId: r.agentId, repostUrl: r.repostUrl, amount: r.amount, status: r.status,
+    createdAt: r.createdAt, updatedAt: r.updatedAt, credential,
+  };
 }
 
 export async function listAirdropClaims(ctx: AppContext) {
@@ -90,9 +153,9 @@ const csvCell = (v: unknown) => {
 };
 export async function airdropClaimsCsv(ctx: AppContext): Promise<string> {
   const rows = await listAirdropClaims(ctx);
-  const head = ["id", "x_handle", "x_url", "wallet", "amount", "status", "created_at_utc"];
+  const head = ["id", "x_handle", "x_url", "wallet", "agent_id", "repost_url", "amount", "status", "created_at_utc"];
   const lines = rows.map((r) =>
-    [r.id, r.xHandle, `https://x.com/${r.xHandle}`, r.wallet, r.amount, r.status, new Date(Number(r.createdAt) * 1000).toISOString()].map(csvCell).join(","),
+    [r.id, r.xHandle, `https://x.com/${r.xHandle}`, r.wallet, r.agentId ?? "", r.repostUrl ?? "", r.amount, r.status, new Date(Number(r.createdAt) * 1000).toISOString()].map(csvCell).join(","),
   );
   return [head.join(","), ...lines].join("\n") + "\n";
 }
