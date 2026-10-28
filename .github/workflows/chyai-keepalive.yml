@@ -1,5 +1,7 @@
-# Keeps the free Render services (ChyAI backend + site) awake. Render free web services sleep after ~15 min idle.
-# GitHub may delay scheduled runs (sometimes 10–30+ min) — acceptable; public repo → Actions minutes are free.
+# Keeps the free Render services (ChyAI backend + site) awake AND checks they are healthy.
+# Render free web services sleep after ~15 min idle. GitHub may delay scheduled runs (sometimes 10–30+ min).
+# Public repo → Actions minutes are free. Output contains only public status flags (no secrets).
+# A failed run (backend down, site down, indexer lagging, signer low) makes GitHub email the repo owner.
 name: chyai-keepalive
 on:
   schedule:
@@ -12,12 +14,12 @@ concurrency:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
-      - name: Ping backend health
+      - name: Ping backend health (wakes it up)
         run: |
           code=$(curl -sS -o /tmp/h.json -w '%{http_code}' --retry 3 --retry-delay 20 --retry-all-errors --max-time 90 https://agentpad-api.onrender.com/v1/health || echo 000)
-          echo "backend /v1/health -> $code"; head -c 300 /tmp/h.json || true; echo
+          echo "backend /v1/health -> $code"
           test "$code" = "200"
       - name: Ping site
         if: always()
@@ -25,3 +27,19 @@ jobs:
           code=$(curl -sS -o /dev/null -w '%{http_code}' --retry 3 --retry-delay 20 --retry-all-errors --max-time 90 https://chyai.onrender.com || echo 000)
           echo "site -> $code"
           test "$code" = "200"
+      - name: Full health (backend / db / rpc / indexer lag / site / signer balance)
+        if: always()
+        run: |
+          # first poll after a wake-up may show the indexer catching up: retry a few times before failing
+          for i in 1 2 3 4; do
+            code=$(curl -sS -o /tmp/f.json -w '%{http_code}' --max-time 90 https://agentpad-api.onrender.com/v1/health/full || echo 000)
+            ok=$(jq -r '.ok // false' /tmp/f.json 2>/dev/null || echo false)
+            echo "try $i: /v1/health/full -> $code ok=$ok"
+            jq -c '{ok, alerts, signerLow, indexerLagging, siteDown, lag: .checks.indexer.lag, signerBnb: .checks.signer.balanceBnb}' /tmp/f.json 2>/dev/null || true
+            [ "$code" = "200" ] && [ "$ok" = "true" ] && exit 0
+            # a low signer balance will not fix itself by waiting
+            [ "$(jq -r '.signerLow // false' /tmp/f.json 2>/dev/null)" = "true" ] && break
+            sleep 45
+          done
+          echo "::error::ChyAI health check failed: $(jq -c '.alerts' /tmp/f.json 2>/dev/null || echo unreachable)"
+          exit 1
