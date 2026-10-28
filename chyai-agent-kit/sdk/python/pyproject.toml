@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentpad"
+version = "0.1.0"
+description = "Thin Python client for the AgentPad BondingNFT launchpad (BSC)"
+requires-python = ">=3.9"
+dependencies = ["web3>=6"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+packages = ["agentpad"]
+
+[tool.setuptools.package-data]
+agentpad = ["abi/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

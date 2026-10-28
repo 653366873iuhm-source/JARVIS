@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "declaration": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "types": [
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@agentpad/sdk": [
+        "src/index.ts"
+      ],
+      "@agentpad/sdk/testing": [
+        "src/testing/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "test",
+    "examples"
+  ]
+}

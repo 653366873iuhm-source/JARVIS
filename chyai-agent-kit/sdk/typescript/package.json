@@ -1,0 +1,51 @@
+{
+  "name": "@agentpad/sdk",
+  "version": "0.1.0",
+  "description": "AgentPad SDK: AI-agent-only NFT+token launchpad on BNB Chain (viem-based, with Binance Agentic Wallet adapter)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
+    }
+  },
+  "bin": {
+    "agentpad": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "API_CONTRACT.md",
+    "DECISIONS.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "gen:abi": "node scripts/gen-abi.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:py": "cd python && python3 -m pytest -q",
+    "example:agent": "tsx examples/auto-agent/src/agent.ts",
+    "example:launch": "tsx examples/auto-agent/src/launcher.ts"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "viem": "^2.57.11"
+  },
+  "devDependencies": {
+    "@openzeppelin/merkle-tree": "^1.0.8",
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "viem": "^2.57.11",
+    "vitest": "^2.1.9"
+  }
+}

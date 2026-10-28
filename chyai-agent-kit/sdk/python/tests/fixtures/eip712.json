@@ -1,0 +1,92 @@
+{
+  "privateKey": "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
+  "cases": [
+    {
+      "kind": "EligibilityPosts",
+      "chainId": 31337,
+      "registry": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "wallet": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "postUrls": [
+        "https://x.com/pancake_chef/status/1900000000000000001",
+        "https://twitter.com/Pancake_Chef/statuses/1900000000000000002?s=20",
+        "1900000000000000003"
+      ],
+      "postIds": "1900000000000000001,1900000000000000002,1900000000000000003",
+      "issuedAt": 1761591337,
+      "digest": "0xd683dda116bc073c2630a46289469dadbee4f0f22656f2f855005b9197b89e9f",
+      "signature": "0x6707ed9b79acd9076749cda97862b78af36a2df47a70cd591831f0395d8e913e369c247927e1819366d8db185f7db6e417d20992da2a26e0b3d89880e8853fd31c"
+    },
+    {
+      "kind": "AgentBinding",
+      "chainId": 31337,
+      "registry": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "agentId": "pancakechef.ai",
+      "wallet": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "xHandle": "pancake_chef",
+      "intent": "launch",
+      "challenge": "c0ffee-challenge",
+      "issuedAt": 1761560000,
+      "expiresAt": 1761560900,
+      "digest": "0x62103e899ed0ce475e147807d3c2be9fb57a1347a2ec6b17276d9eb525bfea29",
+      "signature": "0xfc4dd6360a41d8926560b1fb8da83c37b6f15a3df2676aef3b7b4450ff19f151615257aab70e0fe1d4cbb1af2a739338dc422c5914e869b7463e48de9f97b8901b"
+    },
+    {
+      "kind": "EligibilityPosts",
+      "chainId": 97,
+      "registry": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "wallet": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "postUrls": [
+        "https://x.com/pancake_chef/status/1900000000000000001",
+        "https://twitter.com/Pancake_Chef/statuses/1900000000000000002?s=20",
+        "1900000000000000003"
+      ],
+      "postIds": "1900000000000000001,1900000000000000002,1900000000000000003",
+      "issuedAt": 1761560097,
+      "digest": "0xabd6ede4778d1b472af0a56a8bbe8f5125186848882ef09189065e483874a74b",
+      "signature": "0x6ad47d85152c74b75f236f500118099636aa9b34212d6eab7e1e70d6d3c9cdcc3558558461909b6819b559fcb4362e47b01e57218062cda2e655e06ae392550e1b"
+    },
+    {
+      "kind": "AgentBinding",
+      "chainId": 97,
+      "registry": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "agentId": "pancakechef.ai",
+      "wallet": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "xHandle": "pancake_chef",
+      "intent": "launch",
+      "challenge": "c0ffee-challenge",
+      "issuedAt": 1761560000,
+      "expiresAt": 1761560900,
+      "digest": "0x12f7d6b618fb7d9f69aac920688fbb7f868938d83230c2c30bb33700add12e5b",
+      "signature": "0xf352aa5363510f2941be4ea36816259faec0b48799425d5e21a7b0fb5389d3741fd23086b8d5a5502f6e5bc187ebe9d27184dc21a34538b9c200ccac5d03ff501c"
+    },
+    {
+      "kind": "EligibilityPosts",
+      "chainId": 56,
+      "registry": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "wallet": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "postUrls": [
+        "https://x.com/pancake_chef/status/1900000000000000001",
+        "https://twitter.com/Pancake_Chef/statuses/1900000000000000002?s=20",
+        "1900000000000000003"
+      ],
+      "postIds": "1900000000000000001,1900000000000000002,1900000000000000003",
+      "issuedAt": 1761560056,
+      "digest": "0x30e87c65bebca469c58965e5e191f2cbe0465dee5fa6d5e55b7924abcaa3cb78",
+      "signature": "0x6d27a4d141586198cb8db3309a01ed4f3847d3c582adb15e9fe60eb8c41ec3985c495057b4f82663f9f680c68081a336fddaef2ee96686f8283bab2a718c9d411c"
+    },
+    {
+      "kind": "AgentBinding",
+      "chainId": 56,
+      "registry": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "agentId": "pancakechef.ai",
+      "wallet": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "xHandle": "pancake_chef",
+      "intent": "launch",
+      "challenge": "c0ffee-challenge",
+      "issuedAt": 1761560000,
+      "expiresAt": 1761560900,
+      "digest": "0x629b9a7af464690c3447b34fc1acf928e2cea77b23f4bbc669389de1e2da25b6",
+      "signature": "0x061336fee88d6e276f807cc6d12db407f2dd7a54640b39aa0d0fbcca7b2d3c4f3ab29c61f12c533cf57cee6e26fe2fcda0003213b2aeb8beb61ffc4ebea782e71c"
+    }
+  ]
+}
