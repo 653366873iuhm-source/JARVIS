@@ -277,7 +277,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
       case "requalify":
         return requalifyAgents(ctx, { now: body.now as number | undefined, force: !!body.force });
       case "sybil":
-        return runSybilScan(ctx);
+        return runSybilScan(ctx, { recheckUnfunded: !!body.recheckUnfunded });
       case "reconcile-nfts":
         return reconcileNftHoldings(ctx, { project: body.project as string | undefined, dryRun: !!body.dryRun });
       case "earlybird-expiry":

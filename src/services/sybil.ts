@@ -34,8 +34,11 @@ class UnionFind {
  * Flagged agents are excluded from rewards and promoter sets immediately; removal from the on-chain whitelist is an
  * admin decision (POST /v1/admin/agents/:wallet/remove).
  */
-export async function runSybilScan(ctx: AppContext) {
+export async function runSybilScan(ctx: AppContext, opts: { recheckUnfunded?: boolean } = {}) {
   const { db, t } = ctx.database;
+  // agents recorded with "no funder" while the funding provider was failing silently (e.g. Etherscan free key on BSC)
+  // are looked up again
+  if (opts.recheckUnfunded) await db.update(t.agents).set({ fundingCheckedAt: null }).where(isNull(t.agents.funder));
   const pending = await db.select().from(t.agents).where(isNull(t.agents.fundingCheckedAt));
   const found = pending.length ? await ctx.funding.firstInboundMany(pending.map((a) => a.wallet)) : new Map();
   if (pending.length) {
