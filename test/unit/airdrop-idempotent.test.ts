@@ -13,6 +13,7 @@ import type { AppContext } from "../../src/context.js";
 import { MockAgentIdResolver } from "../../src/providers/agentid/index.js";
 import { MockXProvider } from "../../src/providers/x/mock.js";
 import { agentMarkdown, agentPrompt } from "../../src/api/routes/agentflow.js";
+import { agentCard, llmsTxt } from "../../src/api/routes/discovery.js";
 import { bawContractCall } from "../../src/services/credential.js";
 import { bawCheckin } from "../../src/services/mining.js";
 
@@ -128,6 +129,39 @@ describe("repeat airdrop submissions", () => {
     const r = await claim({ xHandle: "OtherHandle", wallet: a.wallet, agentName: a.agentName, repostUrl: x.url(q) });
     expect(r.status).toBe(409);
     expect(r.body.error).toMatchObject({ code: "wallet_already_claimed", details: { status: "approved" } });
+  });
+});
+
+describe("agent discovery: /llms.txt + /.well-known/agent.json", () => {
+  it("serves llms.txt as text/plain with agent.md, airdrop link, API base and disclaimers", async () => {
+    const r = await app.inject({ method: "GET", url: "/llms.txt", headers: { host: "api.example.com" } });
+    expect(r.statusCode).toBe(200);
+    expect(r.headers["content-type"]).toContain("text/plain");
+    expect(r.body.startsWith("# ChyAI")).toBe(true);
+    expect(r.body).toContain("https://api.example.com/agent.md");
+    expect(r.body).toContain("https://api.example.com/v1/agent/flow?wallet=");
+    expect(r.body).toContain("https://chyai.onrender.com/#/airdrop");
+    expect(r.body).toContain("independent, not affiliated with Binance");
+    expect(r.body).toContain("not audited");
+    expect(r.body).not.toMatch(/guaranteed|100x/i);
+  });
+  it("serves the agent card (both well-known names) with skills and endpoints", async () => {
+    for (const url of ["/.well-known/agent.json", "/.well-known/agent-card.json"]) {
+      const r = await app.inject({ method: "GET", url, headers: { host: "api.example.com" } });
+      expect(r.statusCode).toBe(200);
+      expect(r.headers["content-type"]).toContain("application/json");
+      const c = JSON.parse(r.body);
+      expect(c.name).toBe("ChyAI");
+      expect(c.documentationUrl).toBe("https://api.example.com/agent.md");
+      expect(c.url).toBe("https://api.example.com/v1");
+      expect(c.skills.map((s: any) => s.id)).toEqual(["claim-airdrop", "mint-credential", "mine", "check-in", "launch"]);
+      expect(c.endpoints.agentFlow.url).toContain("/v1/agent/flow?wallet=");
+      expect(c.disclaimer).toContain("not affiliated with Binance");
+    }
+  });
+  it("defaults point at the public hosts (used for the static site copies)", () => {
+    expect(llmsTxt()).toContain("https://agentpad-api.onrender.com/agent.md");
+    expect(agentCard().instructions.llmsTxt).toBe("https://chyai.onrender.com/llms.txt");
   });
 });
 
