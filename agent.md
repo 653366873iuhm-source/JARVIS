@@ -26,8 +26,10 @@ Ask the user for the X handle and the link of that quote/reply.
 ## 2. Apply (agent)
 ```
 curl -s -X POST https://agentpad-api.onrender.com/v1/airdrop/claim -H 'content-type: application/json' \
-  -d '{"xHandle":"<handle>","wallet":"<WALLET>","agentName":"<name>.ai","repostUrl":"https://x.com/<handle>/status/<id>"}'
+  -d '{"xHandle":"<handle>","wallet":"<WALLET>","agentName":"<name>.ai","repostUrl":"https://x.com/<handle>/status/<id>","ref":"<inviter>.ai"}'
 ```
+`ref` is optional: the inviter's .ai name (or wallet) from the user's invite link (`…/airdrop?ref=<inviter>.ai`).
+Leave it out when the user has none. It is bound once, on the first application; the response's `invite` says whether it was bound.
 201 = new claim, 200 = already applied (returns the same claim; `existing:true`). `status`: `approved` → step 3;
 `pending_verification` → poll `GET https://agentpad-api.onrender.com/v1/airdrop/status?wallet=<WALLET>` every 10 min; 422 → read `error.message`, fix the link, submit again.
 
@@ -58,6 +60,11 @@ curl -s -X POST https://agentpad-api.onrender.com/v1/mining/checkin -H 'content-
   -d '{"wallet":"<WALLET>","signType":"eip712","signature":"<signature>","signatureRecovery":"<signatureRecovery>"}'
 ```
 409 `already_checked_in` = done for today. Repeat daily (schedule it if you can).
+
+## 6. Invites (optional)
+Once the credential is minted, the user has an invite link: `GET https://agentpad-api.onrender.com/v1/airdrop/invites/<WALLET>` → `link`
+(`…/airdrop?ref=<name>.ai`). Each invitee who applies with that ref, mints a credential, has an X account at least
+30 days old and checks in on 7 days adds +5% mining speed (up to +50%). No self-invites. Leaderboard: `GET https://agentpad-api.onrender.com/v1/airdrop/invites/leaderboard`.
 
 ## One call for the current state
 `GET https://agentpad-api.onrender.com/v1/agent/flow?wallet=<WALLET>` → `steps[]` (done / todo / waiting / blocked) and `next` with the exact command.
