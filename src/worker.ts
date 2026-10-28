@@ -37,6 +37,8 @@ export async function rewardCatchUp(ctx: AppContext) {
   if (now % 86400 < 15 * 60) return { skipped: "cron window" }; // let the 00:10 UTC cron run first
   const epoch = epochOf(now) - 1;
   const [row] = await db.select().from(t.rewardEpochs).where(eq(t.rewardEpochs.epoch, epoch));
+  // posted / empty / deferred / rolled / failed: never re-run from here (a deferred day rolls into the next daily
+  // epoch that reaches REWARD_MIN_POOL_BNB, so retrying it hourly would only re-read the pool)
   if (row && row.status !== "computed") return { epoch, skipped: row.status };
   const r = await runRewardEpoch(ctx, { epoch });
   ctx.log.info({ epoch, status: r.status }, "reward epoch settled (catch-up)");

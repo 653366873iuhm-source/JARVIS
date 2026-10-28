@@ -197,6 +197,8 @@ export const ConfigSchema = z.object({
   // ---- rewards
   REWARD_CRON: z.string().default("10 0 * * *"), // UTC
   REWARD_MAX_POSTS_PER_AGENT_DAY: num(3),
+  // no postRoot (no tx) while RewardPool.unallocated() is below this; the epoch is recorded 'deferred' and rolls over
+  REWARD_MIN_POOL_BNB: num(0.01),
   REFERRAL_WINDOW_SEC: num(86400),
 
   // ---- sybil

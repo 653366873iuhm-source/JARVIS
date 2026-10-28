@@ -10,7 +10,7 @@ import { ApiError, createChallenge, getAgent, verifyRegistration } from "../serv
 import { candles, leaderboard, listProjects, projectDetail, projectHolders, projectTrades, recentTrades } from "../services/market.js";
 import { promoCode, promoterProof, promotionStatus, promotionTick, submitPromoPost } from "../services/promotion.js";
 import { bindReferral, getReferralCode } from "../services/referrals.js";
-import { rewardsFor, runRewardEpoch, epochOf } from "../services/rewards.js";
+import { rewardsFor, runRewardEpoch, epochOf, rewardPoolStatus } from "../services/rewards.js";
 import { listClusters, removeAgent, revokeLaunch, runSybilScan } from "../services/sybil.js";
 import { requalifyAgents } from "../services/requalify.js";
 import { sendAdminTx } from "../services/adminTx.js";
@@ -205,7 +205,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   app.get("/v1/rewards", async () => {
     const { db, t } = ctx.database;
     const rows = await db.select().from(t.rewardEpochs).orderBy(desc(t.rewardEpochs.epoch)).limit(60);
-    return rows.map(({ tree: _tree, ...r }) => r);
+    return { pool: await rewardPoolStatus(ctx), epochs: rows.map(({ tree: _tree, ...r }) => r) };
   });
 
   // ------------------------------------------------------------------ admin

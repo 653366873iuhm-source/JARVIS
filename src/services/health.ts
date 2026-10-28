@@ -11,6 +11,7 @@ import { desc, sql } from "drizzle-orm";
 import { formatEther, type Address } from "viem";
 import type { AppContext } from "../context.js";
 import { CURSOR_KEY, CURSOR_TS_KEY, getKv } from "./indexer.js";
+import { rewardPoolStatus } from "./rewards.js";
 
 type Cached<T> = { at: number; v: T };
 let balCache: Cached<SignerStatus> | null = null;
@@ -107,6 +108,7 @@ export async function rewardsStatus(ctx: AppContext) {
   const [pending] = await db.select({ n: sql<number>`count(*)` }).from(t.adminTxs).where(sql`${t.adminTxs.kind} = 'postRoot' and ${t.adminTxs.status} = 'prepared'`);
   const expected = Math.floor(Date.now() / 1000 / 86400) - 1; // yesterday (UTC) should be settled after 00:10 UTC
   const autoSend = ctx.cfg.AUTO_SUBMIT_ADMIN_TXS && ctx.cfg.TX_SEND_ENABLED;
+  const pool = await rewardPoolStatus(ctx).catch((e) => ({ error: String(e?.message ?? e).slice(0, 200) }) as any);
   return {
     autoSubmit: ctx.cfg.AUTO_SUBMIT_ADMIN_TXS,
     txSendEnabled: ctx.cfg.TX_SEND_ENABLED,
@@ -115,6 +117,7 @@ export async function rewardsStatus(ctx: AppContext) {
     expectedEpoch: expected,
     upToDate: !!last && last.epoch >= expected,
     preparedRoots: Number(pending?.n ?? 0), // postRoot txs waiting (should be 0 when autoSend)
+    pool, // RewardPool.unallocated vs REWARD_MIN_POOL_BNB: below it epochs are 'deferred' (no tx) and roll over
     ok: !last || last.status !== "failed",
   };
 }

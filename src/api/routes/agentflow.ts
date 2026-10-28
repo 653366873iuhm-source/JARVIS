@@ -17,6 +17,8 @@ import { getMining } from "../../services/mining.js";
 import { ApiError } from "../../services/registration.js";
 import { checksum } from "../../lib/util.js";
 import { normalizeRef } from "../../services/invites.js";
+import { minPoolWei } from "../../services/rewards.js";
+import { formatEther } from "viem";
 
 export const OFFICIAL_X = "https://x.com/ChyAI_Official";
 export const PINNED_POST = "https://x.com/ChyAI_Official/status/2115430735167607129";
@@ -38,7 +40,7 @@ export function agentPrompt(base: string, ref?: string | null) {
   ].join("\n");
 }
 
-export function agentMarkdown(base: string, chainId: number) {
+export function agentMarkdown(base: string, chainId: number, minPool = "0.01") {
   const api = `${base}/v1`;
   return `# ChyAI 空投 → 凭证 → 挖矿 · Agent 一键流程
 
@@ -109,7 +111,11 @@ Once the credential is minted, the user has an invite link: \`GET ${api}/airdrop
 30 days old and checks in on 7 days adds +5% mining speed (up to +50%). No self-invites. Leaderboard: \`GET ${api}/airdrop/invites/leaderboard\`.
 
 ## 7. Claim promotion rewards (agent; user approves the tx)
-Daily reward roots are posted on-chain by the platform. Check what the wallet can claim:
+Reward roots are posted on-chain by the platform in the daily settlement, but only once the reward pool
+(RewardPool.unallocated) reaches ${minPool} BNB. Below that nothing is posted and the pool rolls over; the settlement that
+reaches it pays out the whole accumulated pool, scored over every day since the last settlement.
+（BNB 奖励在奖励池达到 ${minPool} BNB 时才结算；未达到时顺延累积，达到后一次结算全部累积的奖励池，未结算的每一天的推广/推荐都计入。）
+Pool and threshold: \`GET ${api}/rewards\` → \`pool\`. Check what the wallet can claim:
 \`\`\`
 curl -s ${api}/rewards/<WALLET>/proof   # → rewards[]: { epoch, amount (wei), proof, claimed, rewardPool, calldata }
 \`\`\`
@@ -173,7 +179,7 @@ export async function agentFlow(ctx: AppContext, walletIn: string, base: string)
 
 export function registerAgentFlowRoutes(app: FastifyInstance, ctx: AppContext) {
   const md = async (req: FastifyRequest, reply: any) =>
-    reply.header("content-type", "text/markdown; charset=utf-8").header("cache-control", "public, max-age=300").send(agentMarkdown(apiBase(req), ctx.cfg.CHAIN_ID));
+    reply.header("content-type", "text/markdown; charset=utf-8").header("cache-control", "public, max-age=300").send(agentMarkdown(apiBase(req), ctx.cfg.CHAIN_ID, formatEther(minPoolWei(ctx.cfg))));
   app.get("/agent.md", md);
   app.get("/v1/agent.md", md);
   app.get<{ Querystring: { ref?: string } }>("/v1/agent/prompt", async (req) => ({ prompt: agentPrompt(apiBase(req), req.query.ref), instructions: `${apiBase(req)}/agent.md` }));

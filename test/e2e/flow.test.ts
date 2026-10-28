@@ -625,7 +625,15 @@ describe("AgentPad backend e2e", () => {
     epoch = epochOf(to);
     x.posts.get(dPost.id)!.likes = 12; // engagement grew after submission: settlement re-fetches submitted URLs by id
     x.fetched.length = 0;
+    // pool below REWARD_MIN_POOL_BNB: deferred, nothing posted on-chain; the same epoch settles once the threshold is met
+    const minBefore = ctx.cfg.REWARD_MIN_POOL_BNB;
+    ctx.cfg.REWARD_MIN_POOL_BNB = Number(pool) / 1e18 + 1;
+    const d = (await inject("POST", "/v1/admin/jobs/rewards/run", { epoch, from: windowFrom, to }, ADMIN)).body;
+    expect(d.status, JSON.stringify(d)).toBe("deferred");
+    expect(((await read(dep.contracts.RewardPool, RewardPoolAbi, "epochs", [BigInt(epoch)])) as readonly any[])[0]).toBe("0x" + "0".repeat(64));
+    ctx.cfg.REWARD_MIN_POOL_BNB = 0;
     const r = (await inject("POST", "/v1/admin/jobs/rewards/run", { epoch, from: windowFrom, to }, ADMIN)).body;
+    ctx.cfg.REWARD_MIN_POOL_BNB = minBefore;
     expect(r.status, JSON.stringify(r)).toBe("posted");
     expect(BigInt(r.total)).toBeLessThanOrEqual(pool);
     expect(BigInt(r.total)).toBeGreaterThan((pool * 999n) / 1000n); // only flooring dust left

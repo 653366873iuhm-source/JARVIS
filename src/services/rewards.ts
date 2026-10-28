@@ -1,14 +1,46 @@
 import { and, desc, eq, gte, lt } from "drizzle-orm";
 import { StandardMerkleTree } from "@openzeppelin/merkle-tree";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, formatEther, parseEther } from "viem";
 import type { AppContext } from "../context.js";
 import { RewardPoolAbi } from "../chain/abi.js";
 import { checksum, lc, nowSec } from "../lib/util.js";
 import { runAdminTx } from "./adminTx.js";
 import { ApiError } from "./registration.js";
+import type { Config } from "../config.js";
 
 export const DAY = 86400;
 export const epochOf = (ts: number) => Math.floor(ts / DAY);
+
+/** RewardPool.unallocated() must reach this before a root is posted (REWARD_MIN_POOL_BNB, default 0.01 BNB). */
+export function minPoolWei(cfg: Pick<Config, "REWARD_MIN_POOL_BNB">): bigint {
+  const v = Number(cfg.REWARD_MIN_POOL_BNB);
+  if (!Number.isFinite(v) || v <= 0) return 0n;
+  return parseEther(v.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 18 }));
+}
+
+/** Epochs whose allocations stand (a root exists / is prepared, or nothing was owed): the next window starts after them. */
+const SETTLED = new Set(["posted", "computed", "empty"]);
+/** Never recomputed: a root went on-chain, nothing was owed, or the window was folded into a later epoch. */
+const FINAL = new Set(["posted", "empty", "rolled"]);
+
+/**
+ * Settlement window for `epoch`: from the end of the last settled epoch (so days that were deferred because the
+ * pool was below the threshold, or that failed / were missed, are scored in the epoch that finally settles),
+ * up to the end of `epoch`. Without any settled epoch: from the earliest deferred/failed window, else the epoch's own day.
+ */
+export async function settlementWindow(ctx: AppContext, epoch: number) {
+  const { db, t } = ctx.database;
+  const rows = (await db.select({ epoch: t.rewardEpochs.epoch, status: t.rewardEpochs.status, windowFrom: t.rewardEpochs.windowFrom, windowTo: t.rewardEpochs.windowTo })
+    .from(t.rewardEpochs).where(lt(t.rewardEpochs.epoch, epoch))).sort((a, b) => a.epoch - b.epoch);
+  const own = epoch * DAY;
+  const settled = rows.filter((r) => SETTLED.has(r.status));
+  const last = settled[settled.length - 1];
+  const pending = rows.filter((r) => (r.status === "deferred" || r.status === "failed") && (!last || r.epoch > last.epoch));
+  let from = own;
+  if (last) from = Math.min(own, last.windowTo);
+  else if (pending.length) from = Math.min(own, ...pending.map((r) => r.windowFrom));
+  return { from, to: own + DAY, rolledEpochs: pending.map((r) => r.epoch) };
+}
 
 /** Engagement score of a post (reposts/replies/quotes weigh more than likes: they spread the post). */
 export const postScore = (p: { likes: number; reposts: number; replies: number; quotes: number }) => p.likes + 2 * p.reposts + 2 * p.replies + 3 * p.quotes;
@@ -46,16 +78,32 @@ export function proRata(pool: bigint, scores: Map<string, bigint>): Map<string, 
 export async function runRewardEpoch(ctx: AppContext, opts: RewardRunOptions) {
   const { db, t } = ctx.database;
   const epoch = opts.epoch;
-  const from = opts.from ?? epoch * DAY;
-  const to = opts.to ?? from + DAY;
   const [existing] = await db.select().from(t.rewardEpochs).where(eq(t.rewardEpochs.epoch, epoch));
-  if (existing && (existing.status === "posted" || existing.status === "empty")) return { epoch, status: existing.status, skipped: true };
+  if (existing && FINAL.has(existing.status)) return { epoch, status: existing.status, skipped: true };
+  const win = await settlementWindow(ctx, epoch);
+  const from = opts.from ?? win.from;
+  const to = opts.to ?? (opts.from !== undefined ? opts.from + DAY : win.to);
+  const days = Math.max(1, Math.ceil((to - from) / DAY));
 
   const onchain = (await ctx.pc.readContract({ address: ctx.addresses.rewardPool, abi: RewardPoolAbi, functionName: "epochs", args: [BigInt(epoch)] })) as readonly unknown[];
   if (onchain[0] !== "0x0000000000000000000000000000000000000000000000000000000000000000") {
     throw new ApiError(409, "epoch_exists", `epoch ${epoch} already has a root on-chain`);
   }
   const pool = (await ctx.pc.readContract({ address: ctx.addresses.rewardPool, abi: RewardPoolAbi, functionName: "unallocated" })) as bigint;
+  const minPool = minPoolWei(ctx.cfg);
+  if (pool < minPool) {
+    // too small to be worth the postRoot + claim gas: no tx; the pool keeps accumulating and the next epoch that
+    // reaches the threshold scores the whole window since the last settled epoch (this day included)
+    const row = {
+      epoch, windowFrom: from, windowTo: to, poolWei: pool.toString(), totalWei: "0", engagementWei: "0", referralWei: "0",
+      root: null, tree: null, txHash: null, status: "deferred", error: `pool ${formatEther(pool)} BNB < min ${formatEther(minPool)} BNB`, createdAt: nowSec(),
+    };
+    if (!opts.dryRun) await db.insert(t.rewardEpochs).values(row).onConflictDoUpdate({ target: t.rewardEpochs.epoch, set: row });
+    return {
+      epoch, status: "deferred", pool: pool.toString(), minPool: minPool.toString(), windowFrom: from, windowTo: to, total: "0", allocations: [],
+      next: `settles when the reward pool reaches ${formatEther(minPool)} BNB`,
+    };
+  }
 
   const agents = new Map((await db.select().from(t.agents)).map((a) => [a.wallet, a] as const));
   const okAgent = (w: string) => {
@@ -102,7 +150,7 @@ export async function runRewardEpoch(ctx: AppContext, opts: RewardRunOptions) {
   }
   const engagement = new Map<string, bigint>();
   for (const [w, scores] of perAgentPosts) {
-    const top = scores.sort((a, b) => b - a).slice(0, ctx.cfg.REWARD_MAX_POSTS_PER_AGENT_DAY);
+    const top = scores.sort((a, b) => b - a).slice(0, ctx.cfg.REWARD_MAX_POSTS_PER_AGENT_DAY * days); // per-day cap × days in the window
     const s = top.reduce((a, b) => a + b, 0);
     if (s > 0) engagement.set(w, BigInt(s));
   }
@@ -147,8 +195,11 @@ export async function runRewardEpoch(ctx: AppContext, opts: RewardRunOptions) {
   };
   if (total === 0n) {
     const row = { ...base, status: "empty", root: null, tree: null, txHash: null, error: null };
-    if (!opts.dryRun) await db.insert(t.rewardEpochs).values(row).onConflictDoUpdate({ target: t.rewardEpochs.epoch, set: row });
-    return { epoch, status: "empty", pool: pool.toString(), total: "0", allocations: [] };
+    if (!opts.dryRun) {
+      await db.insert(t.rewardEpochs).values(row).onConflictDoUpdate({ target: t.rewardEpochs.epoch, set: row });
+      await markRolled(ctx, epoch, from);
+    }
+    return { epoch, status: "empty", windowFrom: from, windowTo: to, pool: pool.toString(), total: "0", allocations: [] };
   }
 
   const values = [...amounts.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([w, v]) => [String(epoch), checksum(w), v.toString()] as [string, string, string]);
@@ -171,7 +222,58 @@ export async function runRewardEpoch(ctx: AppContext, opts: RewardRunOptions) {
   const res = await runAdminTx(ctx, { kind: "postRoot", target: String(epoch), to: ctx.addresses.rewardPool, data, reason: `epoch ${epoch} total ${total}` });
   const status = res.status === "confirmed" ? "posted" : res.status === "prepared" ? "computed" : "failed";
   await db.update(t.rewardEpochs).set({ status, txHash: res.txHash ?? null, error: res.error ?? null }).where(eq(t.rewardEpochs.epoch, epoch));
-  return { epoch, status, root: tree.root, pool: pool.toString(), total: total.toString(), txHash: res.txHash, allocations };
+  if (status !== "failed") await markRolled(ctx, epoch, from);
+  return { epoch, status, windowFrom: from, windowTo: to, root: tree.root, pool: pool.toString(), total: total.toString(), txHash: res.txHash, allocations };
+}
+
+/** Deferred / failed epochs whose window lies inside the one `epoch` just settled are folded into it (never re-run). */
+async function markRolled(ctx: AppContext, epoch: number, from: number) {
+  const { db, t } = ctx.database;
+  const rows = await db.select({ epoch: t.rewardEpochs.epoch, status: t.rewardEpochs.status, windowFrom: t.rewardEpochs.windowFrom })
+    .from(t.rewardEpochs).where(lt(t.rewardEpochs.epoch, epoch));
+  for (const r of rows) {
+    if ((r.status === "deferred" || r.status === "failed") && r.windowFrom >= from) {
+      await db.update(t.rewardEpochs).set({ status: "rolled", error: `rolled into epoch ${epoch}` }).where(eq(t.rewardEpochs.epoch, r.epoch));
+    }
+  }
+}
+
+/** Reward pool vs. the settlement threshold, for /v1/health and /v1/rewards (cached 60 s). */
+let poolCache: { at: number; v: Awaited<ReturnType<typeof readPoolStatus>> } | null = null;
+export const clearPoolCache = () => { poolCache = null; };
+async function readPoolStatus(ctx: AppContext) {
+  const minPool = minPoolWei(ctx.cfg);
+  let pool: bigint | null = null;
+  let error: string | undefined;
+  if (ctx.addresses.rewardPool) {
+    try {
+      pool = (await ctx.pc.readContract({ address: ctx.addresses.rewardPool, abi: RewardPoolAbi, functionName: "unallocated" })) as bigint;
+    } catch (e: any) {
+      error = String(e?.shortMessage ?? e?.message ?? e).slice(0, 200);
+    }
+  }
+  const { db, t } = ctx.database;
+  const deferred = await db.select({ epoch: t.rewardEpochs.epoch, windowFrom: t.rewardEpochs.windowFrom }).from(t.rewardEpochs).where(eq(t.rewardEpochs.status, "deferred"));
+  const reached = pool !== null && pool >= minPool;
+  return {
+    unallocatedWei: pool?.toString() ?? null,
+    unallocatedBnb: pool !== null ? formatEther(pool) : null,
+    minPoolWei: minPool.toString(),
+    minPoolBnb: formatEther(minPool),
+    thresholdReached: pool !== null ? reached : null,
+    deferredEpochs: deferred.length,
+    accumulatingSince: deferred.length ? Math.min(...deferred.map((d) => d.windowFrom)) : null,
+    nextSettlement: reached
+      ? `next daily settlement (00:10 UTC) posts the pool`
+      : `next settlement when pool ≥ ${formatEther(minPool)} BNB`,
+    ...(error ? { error } : {}),
+  };
+}
+export async function rewardPoolStatus(ctx: AppContext) {
+  if (poolCache && Date.now() - poolCache.at < 60_000) return poolCache.v;
+  const v = await readPoolStatus(ctx);
+  poolCache = { at: Date.now(), v };
+  return v;
 }
 
 /** Claim data for RewardPool.claim(epoch, account, amount, proof). */
