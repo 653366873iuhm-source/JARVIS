@@ -1,3 +1,4 @@
+import { isHiddenActivity, isHiddenProject, isHiddenWallet } from "./hidden.js";
 import { and, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
 import type { AppContext } from "../context.js";
 import { MAX_CURVE_NFTS, TOKENS_PER_NFT, VIRTUAL_BNB0, VIRTUAL_TOKEN0, nftPrice } from "../lib/curve.js";
@@ -135,7 +136,8 @@ export async function listProjects(ctx: AppContext, q: ListProjectsQuery) {
   }
   const now = await clockNow(ctx);
   const [rows, agg, ids, txs] = await Promise.all([loadProjects(ctx), aggregates(ctx, now), agentIds(ctx), launchTxs(ctx)]);
-  let items = rows.map((p) => summarize(p, agg, ids, txs, now));
+  // test projects (HIDE_PROJECTS) are left out of public lists unless searched for by exact address
+  let items = rows.filter((p) => !isHiddenProject(ctx.cfg, p.address) || lc(q.search ?? "") === p.address).map((p) => summarize(p, agg, ids, txs, now));
   if (q.search) {
     const s = q.search.toLowerCase();
     items = items.filter((p) => p.name.toLowerCase().includes(s) || p.symbol.toLowerCase().includes(s) || p.address === s || (p.launcherAgentId ?? "").includes(s));
@@ -305,18 +307,18 @@ export async function recentTrades(ctx: AppContext, limit = 30) {
       .from(t.trades)
       .innerJoin(t.projects, eq(t.projects.address, t.trades.project))
       .orderBy(desc(t.trades.blockNumber), desc(t.trades.logIndex))
-      .limit(lim),
+      .limit(lim + 50),
     db
       .select({ sw: t.poolSwaps, symbol: t.projects.symbol, name: t.projects.name })
       .from(t.poolSwaps)
       .innerJoin(t.projects, eq(t.projects.address, t.poolSwaps.project))
       .orderBy(desc(t.poolSwaps.blockNumber), desc(t.poolSwaps.logIndex))
-      .limit(lim),
+      .limit(lim + 50),
   ]);
   const ids = await agentIds(ctx);
   return mergeNewestFirst(
-    rows.map((r) => ({ k: r.tr, v: toTrade(r.tr, { agentId: ids.get(r.tr.trader) ?? null, name: r.name, symbol: r.symbol }) })),
-    swaps.map((r) => ({ k: r.sw, v: poolSwapToTrade(r.sw, { agentId: ids.get(r.sw.trader) ?? null, name: r.name, symbol: r.symbol }) })),
+    rows.filter((r) => !isHiddenActivity(ctx.cfg, r.tr.project, r.tr.trader)).map((r) => ({ k: r.tr, v: toTrade(r.tr, { agentId: ids.get(r.tr.trader) ?? null, name: r.name, symbol: r.symbol }) })),
+    swaps.filter((r) => !isHiddenActivity(ctx.cfg, r.sw.project, r.sw.trader)).map((r) => ({ k: r.sw, v: poolSwapToTrade(r.sw, { agentId: ids.get(r.sw.trader) ?? null, name: r.name, symbol: r.symbol }) })),
     lim,
   );
 }
@@ -412,6 +414,7 @@ export async function leaderboard(ctx: AppContext, q: { sort?: string; limit?: n
     };
     let volume = new Map<string, bigint>();
     for (const tr of trades) {
+      if (isHiddenProject(ctx.cfg, tr.p)) continue;
       const bnb = BigInt(tr.bnb);
       const fee = BigInt(tr.fee);
       add(tr.w, tr.p, tr.side === "buy" ? -(bnb + fee) : bnb - fee);
@@ -421,9 +424,9 @@ export async function leaderboard(ctx: AppContext, q: { sort?: string; limit?: n
     const promo = new Map<string, number>();
     for (const p of posts) promo.set(p.w, (promo.get(p.w) ?? 0) + (p.s === "duplicate_text" ? 0 : 1));
     const data = agents
-      .filter((a) => !a.removed)
+      .filter((a) => !a.removed && !isHiddenWallet(ctx.cfg, a.wallet))
       .map((a) => {
-        const launched = projects.filter((p) => p.launcher === a.wallet);
+        const launched = projects.filter((p) => p.launcher === a.wallet && !isHiddenProject(ctx.cfg, p.address));
         const m = pos.get(a.wallet) ?? new Map<string, bigint>();
         let pnl = 0n;
         let wins = 0;

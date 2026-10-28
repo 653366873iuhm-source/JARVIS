@@ -11,7 +11,7 @@ const events = (abi: readonly any[], names: string[]) => abi.filter((e) => e.typ
 const REGISTRY_EVENTS = events(AgentRegistryAbi, ["AgentRegistered", "LaunchRevoked", "AgentRemoved"]);
 const FACTORY_EVENTS = events(LaunchFactoryAbi, ["Launched"]);
 const PROJECT_EVENTS = events(BondingNFTAbi, [
-  "Minted", "Burned", "Transfer", "PromotionStarted", "PromotionAttested", "Graduated", "PromoterExempted", "Redeemed", "Deposited",
+  "Minted", "Burned", "Transfer", "TransferDeferred", "PromotionStarted", "PromotionAttested", "Graduated", "PromoterExempted", "Redeemed", "Deposited",
 ]);
 const POOL_EVENTS = events(RewardPoolAbi, ["RootPosted", "Claimed", "EpochClosed"]);
 
@@ -333,6 +333,11 @@ export class Indexer {
         } else {
           await db.update(t.nftTokens).set({ owner: to }).where(and(eq(t.nftTokens.project, addr), eq(t.nftTokens.tokenId, tokenId)));
         }
+        break;
+      }
+      case "TransferDeferred": {
+        // BondingNFT v2 sell()/redeem(): the token is retired at once; its Transfer(from -> 0) log follows in a later tx
+        await db.delete(t.nftTokens).where(and(eq(t.nftTokens.project, addr), eq(t.nftTokens.tokenId, Number(a.tokenId))));
         break;
       }
       case "PromotionStarted":

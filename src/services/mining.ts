@@ -10,7 +10,9 @@
  * a background sweep (MINING_ACTIVATE_SWEEP_MS) checks approved claims so mining starts within ~2 min of the mint.
  * Points are stored as integers in units of 1e-8 points ("e8"), so the site can show/tick 8 decimals exactly.
  */
-import { and, count, desc, eq, gte, sql } from "drizzle-orm";
+import { isHiddenWallet } from "./hidden.js";
+import { inviteBoostOf, qualifiedInviteCount } from "./invites.js";
+import { and, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { Hex } from "viem";
 import type { AppContext } from "../context.js";
 import { checksum, lc, nowSec, uuid } from "../lib/util.js";
@@ -159,13 +161,15 @@ export async function walletActivity(ctx: AppContext, wallet: string, now = nowS
   return { launches: Number(l?.n ?? 0), volumeWei: vol.toString(), volumeBnb: Number((vol * 10_000n) / WEI_PER_BNB) / 10_000, windowDays: ctx.cfg.MINING_VOLUME_WINDOW_DAYS };
 }
 
-export function computeRate(cfg: AppContext["cfg"], credit: number, act: Activity) {
+export function computeRate(cfg: AppContext["cfg"], credit: number, act: Activity, qualifiedInvites = 0) {
   const launchBoost = Math.min(cfg.MINING_LAUNCH_BOOST_CAP, act.launches * cfg.MINING_LAUNCH_BOOST);
   const volumeBoost = Math.min(cfg.MINING_VOLUME_BOOST_CAP, act.volumeBnb * cfg.MINING_VOLUME_BOOST_PER_BNB);
-  const multiplier = 1 + launchBoost + volumeBoost;
+  // +5% per qualified invitee (minted credential, unique .ai, X ≥ 30 days, 7 check-in days), capped at +50%
+  const inviteBoost = inviteBoostOf(cfg, qualifiedInvites);
+  const multiplier = 1 + launchBoost + volumeBoost + inviteBoost;
   const base = (credit / 1000) * cfg.MINING_POINTS_PER_1000_CREDIT_DAY;
   const rateE8 = Math.round(base * multiplier * E8);
-  return { basePerDay: base, launchBoost, volumeBoost, multiplier, rateE8 };
+  return { basePerDay: base, launchBoost, volumeBoost, inviteBoost, multiplier, rateE8 };
 }
 
 type Account = typeof import("../db/schema.sqlite.js").miningAccounts.$inferSelect;
@@ -178,14 +182,15 @@ async function settle(ctx: AppContext, wallet: string, now: number) {
   const cred = await readCredential(ctx, wallet);
   const credit = cred.active ? cred.credit : 0;
   const act = await walletActivity(ctx, wallet, now);
-  const rate = computeRate(ctx.cfg, credit, act);
+  const invites = credit > 0 ? await qualifiedInviteCount(ctx, wallet, now) : { invited: 0, qualified: 0 };
+  const rate = computeRate(ctx.cfg, credit, act, invites.qualified);
   for (let attempt = 0; attempt < 3; attempt++) {
     const [a] = await db.select().from(t.miningAccounts).where(eq(t.miningAccounts.wallet, wallet));
     if (!a) {
-      if (credit <= 0) return { account: null, cred, act, rate };
+      if (credit <= 0) return { account: null, cred, act, rate, invites };
       const row = { wallet, pointsE8: 0, checkinE8: 0, rateE8PerDay: rate.rateE8, credit, lastAccrualAt: now, createdAt: now, updatedAt: now };
       const ins = await db.insert(t.miningAccounts).values(row).onConflictDoNothing().returning();
-      if (ins.length) return { account: ins[0] as Account, cred, act, rate };
+      if (ins.length) return { account: ins[0] as Account, cred, act, rate, invites };
       continue; // raced with another settle → reload
     }
     const pointsE8 = liveE8(a, now);
@@ -195,7 +200,7 @@ async function settle(ctx: AppContext, wallet: string, now: number) {
       .set({ pointsE8, rateE8PerDay: rate.rateE8, credit, lastAccrualAt: Math.max(now, a.lastAccrualAt), updatedAt: now })
       .where(and(eq(t.miningAccounts.wallet, wallet), eq(t.miningAccounts.lastAccrualAt, a.lastAccrualAt)))
       .returning();
-    if (upd.length) return { account: upd[0] as Account, cred, act, rate };
+    if (upd.length) return { account: upd[0] as Account, cred, act, rate, invites };
   }
   throw new ApiError(503, "busy", "请稍后再试");
 }
@@ -203,7 +208,7 @@ async function settle(ctx: AppContext, wallet: string, now: number) {
 export async function getMining(ctx: AppContext, walletIn: string) {
   const wallet = normalizeWallet(walletIn);
   const now = nowSec();
-  const { account, cred, act, rate } = await settle(ctx, wallet, now);
+  const { account, cred, act, rate, invites } = await settle(ctx, wallet, now);
   const { db, t } = ctx.database;
   const today = utcDay(now);
   const [ci] = await db.select().from(t.miningCheckins).where(and(eq(t.miningCheckins.wallet, wallet), eq(t.miningCheckins.day, today)));
@@ -226,6 +231,9 @@ export async function getMining(ctx: AppContext, walletIn: string) {
       volumeWei: act.volumeWei,
       volumeWindowDays: act.windowDays,
       volumeBoost: rate.volumeBoost,
+      invited: invites.invited,
+      qualifiedInvites: invites.qualified,
+      inviteBoost: rate.inviteBoost,
     },
     miningSince: account?.createdAt ?? null,
     checkin: {
@@ -286,17 +294,20 @@ export async function miningLeaderboard(ctx: AppContext, limit = 50) {
   const now = nowSec();
   const rows = await db.select().from(t.miningAccounts).orderBy(desc(t.miningAccounts.pointsE8)).limit(Math.max(limit * 4, 200));
   const ranked = rows
+    .filter((a) => !isHiddenWallet(ctx.cfg, a.wallet))
     .map((a) => ({ wallet: checksum(a.wallet), e8: liveE8(a as Account, now), ratePerDay: a.rateE8PerDay / E8, credit: a.credit }))
     .sort((x, y) => y.e8 - x.e8)
-    .slice(0, limit)
-    .map(({ e8, ...r }, i) => ({ rank: i + 1, ...r, points: fmtE8(e8) }));
-  return { asOf: now, items: ranked };
+    .slice(0, limit);
+  const names = ranked.length
+    ? new Map((await db.select({ w: t.airdropClaims.wallet, a: t.airdropClaims.agentId }).from(t.airdropClaims).where(inArray(t.airdropClaims.wallet, ranked.map((r) => lc(r.wallet))))).map((r) => [r.w, r.a] as const))
+    : new Map<string, string | null>();
+  return { asOf: now, items: ranked.map(({ e8, ...r }, i) => ({ rank: i + 1, ...r, agentId: names.get(lc(r.wallet)) ?? null, points: fmtE8(e8) })) };
 }
 
 export async function miningStats(ctx: AppContext) {
   const { db, t } = ctx.database;
   const now = nowSec();
-  const rows = await db.select().from(t.miningAccounts);
+  const rows = (await db.select().from(t.miningAccounts)).filter((a) => !isHiddenWallet(ctx.cfg, a.wallet));
   let total = 0;
   let active = 0;
   for (const a of rows) {
@@ -322,6 +333,8 @@ export async function miningStats(ctx: AppContext) {
       volumeBoostCap: c.MINING_VOLUME_BOOST_CAP,
       volumeWindowDays: c.MINING_VOLUME_WINDOW_DAYS,
       checkinPoints: c.MINING_CHECKIN_POINTS,
+      inviteBoostPerInvitee: c.INVITE_BOOST_PER_INVITEE,
+      inviteBoostCap: c.INVITE_BOOST_CAP,
       note: "积分将按规则兑换平台币，具体比例与时间另行公告，不承诺收益",
     },
   };
@@ -332,12 +345,12 @@ export async function miningActivity(ctx: AppContext, limit = 30) {
   const { db, t } = ctx.database;
   const n = Math.max(1, Math.min(100, limit));
   const [cis, starts] = await Promise.all([
-    db.select().from(t.miningCheckins).orderBy(desc(t.miningCheckins.createdAt)).limit(n),
-    db.select().from(t.miningAccounts).orderBy(desc(t.miningAccounts.createdAt)).limit(n),
+    db.select().from(t.miningCheckins).orderBy(desc(t.miningCheckins.createdAt)).limit(n + 20),
+    db.select().from(t.miningAccounts).orderBy(desc(t.miningAccounts.createdAt)).limit(n + 20),
   ]);
   const items = [
-    ...cis.map((c) => ({ kind: "checkin" as const, wallet: shortWallet(checksum(c.wallet)), points: fmtE8(c.pointsE8), ts: c.createdAt })),
-    ...starts.map((a) => ({ kind: "mint" as const, wallet: shortWallet(checksum(a.wallet)), credit: a.credit, ts: a.createdAt })),
+    ...cis.filter((c) => !isHiddenWallet(ctx.cfg, c.wallet)).map((c) => ({ kind: "checkin" as const, wallet: shortWallet(checksum(c.wallet)), points: fmtE8(c.pointsE8), ts: c.createdAt })),
+    ...starts.filter((a) => !isHiddenWallet(ctx.cfg, a.wallet)).map((a) => ({ kind: "mint" as const, wallet: shortWallet(checksum(a.wallet)), credit: a.credit, ts: a.createdAt })),
   ]
     .sort((x, y) => y.ts - x.ts)
     .slice(0, n);

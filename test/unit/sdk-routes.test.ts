@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getAddress } from "viem";
 import {
-  classifyVerifyError, pendingOrRejected, toPromotionCode, toQuote, toRegisterRequestResponse, toRewardProofs, xPostText, regKey,
+  classifyVerifyError, pendingOrRejected, toPromotionCode, toQuote, buildSellTx, toRegisterRequestResponse, toRewardProofs, xPostText, regKey,
   RETRY_AFTER_SEC, PUBLIC_APP_URL, type RegRequest,
 } from "../../src/api/routes/sdk.js";
 import { ApiError } from "../../src/services/registration.js";
@@ -89,7 +89,7 @@ describe("promotion code", () => {
   it("full PromotionCodeResponse; window null before promotion", () => {
     const r = toPromotionCode(p, W, "AP-ABCDEFGH", "nova_bot", 5_000);
     expect(r).toMatchObject({
-      project: getAddress(P), wallet: getAddress(W), code: "AP-ABCDEFGH", tag: "#AP_AGC", cashtag: "$AGC", link: `${PUBLIC_APP_URL}/project/${getAddress(P)}`,
+      project: getAddress(P), wallet: getAddress(W), code: "AP-ABCDEFGH", tag: "#AP_AGC", cashtag: "$AGC", link: `${PUBLIC_APP_URL}/#/project/${getAddress(P)}`,
       requiredText: ["#AP_AGC", "AP-ABCDEFGH"], window: null, expiresAt: 5_000 + 86_400,
     });
     expect(Array.isArray(r.rules)).toBe(true);
@@ -107,5 +107,25 @@ describe("rewards proof", () => {
     const pool = "0x" + "ee".repeat(20);
     const out = toRewardProofs({ rewardPool: pool, items: [{ epoch: 20_000, amountWei: "123", proof: ["0x01"], claimed: false, root: "0xroot", calldata: "0xcd" }] });
     expect(out).toEqual([{ epoch: "20000", amount: "123", proof: ["0x01"], claimed: false, rewardPool: getAddress(pool), root: "0xroot", calldata: "0xcd" }]);
+  });
+});
+
+describe("sell calldata (BondingNFT v2)", () => {
+  it("v2 -> sell(ids, minOut) with slippage; v1 -> burn + warning; baw command carries the calldata", async () => {
+    const { decodeFunctionData } = await import("viem");
+    const { BondingNFTAbi } = await import("../../src/chain/abi.js");
+    const v2 = buildSellTx(P, W, 2, [7n, 3n], 1_000_000n, 100);
+    expect(v2.method).toBe("sell");
+    expect(v2.minOut).toBe("990000");
+    expect(v2.tx).toMatchObject({ to: getAddress(P), value: "0" });
+    const d = decodeFunctionData({ abi: BondingNFTAbi, data: v2.tx.data as `0x${string}` });
+    expect(d.functionName).toBe("sell");
+    expect(d.args).toEqual([[7n, 3n], 990000n]);
+    expect(v2.baw).toContain(`--inputData ${v2.tx.data}`);
+    expect(v2).not.toHaveProperty("warning");
+    const v1 = buildSellTx(P, W, 1, [1n], 1000n, 0);
+    expect(v1.method).toBe("burn");
+    expect(v1.tx.data.slice(0, 10)).toBe("0x1ee48cc2");
+    expect(v1.warning).toMatch(/351803/);
   });
 });

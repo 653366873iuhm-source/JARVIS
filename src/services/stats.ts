@@ -6,6 +6,7 @@
  * reachable; otherwise derived from indexed curve trades (floor(fee * 2000 / 10000) per trade — the same
  * per-trade rounding as BondingNFT._distributeFee).
  */
+import { isHiddenProject } from "./hidden.js";
 import type { Address } from "viem";
 import type { AppContext } from "../context.js";
 import { FeeSplitterAbi } from "../chain/abi.js";
@@ -50,8 +51,9 @@ export async function platformStats(ctx: AppContext, opts: { maxAgeMs?: number }
   const maxAge = opts.maxAgeMs ?? 10_000;
   if (cache && cache.key === ctx && Date.now() - cache.at < maxAge) return cache.v;
   const { db, t } = ctx.database;
-  const projects = await db.select({ phase: t.projects.phase, volumeWei: t.projects.volumeWei }).from(t.projects);
-  const trades = await db.select({ fee: t.trades.feeWei }).from(t.trades);
+  // test projects (HIDE_PROJECTS) are not counted; charity totals below are still read from chain
+  const projects = (await db.select({ address: t.projects.address, phase: t.projects.phase, volumeWei: t.projects.volumeWei }).from(t.projects)).filter((p) => !isHiddenProject(ctx.cfg, p.address));
+  const trades = (await db.select({ project: t.trades.project, fee: t.trades.feeWei }).from(t.trades)).filter((r) => !isHiddenProject(ctx.cfg, r.project));
   let fees = 0n, indexDonated = 0n;
   for (const r of trades) {
     const f = BigInt(r.fee);

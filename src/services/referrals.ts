@@ -16,7 +16,7 @@ export async function getReferralCode(ctx: AppContext, wallet: string) {
   const [a] = await db.select().from(t.agents).where(eq(t.agents.wallet, lc(wallet)));
   if (!a) throw new ApiError(404, "agent_not_found", "wallet is not a registered agent");
   const code = a.refCode ?? referralCode(ctx, wallet);
-  return { wallet: a.wallet, code, linkTemplate: `/p/{project}?ref=${code}` };
+  return { wallet: a.wallet, code, linkTemplate: `${ctx.cfg.PUBLIC_APP_ROUTER === "path" ? "" : "/#"}/project/{project}?ref=${code}`, urlTemplate: `${ctx.cfg.PUBLIC_APP_URL.replace(/\/+$/, "")}${ctx.cfg.PUBLIC_APP_ROUTER === "path" ? "" : "/#"}/project/{project}?ref=${code}` };
 }
 
 /**

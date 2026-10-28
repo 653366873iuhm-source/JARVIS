@@ -2,7 +2,8 @@
  * SDK routes (sdk/API_CONTRACT.md #1, #2, #5, #6, #7), registered under /v1:
  *   POST /v1/agents/register-request                          two-phase registration (status machine)
  *   GET  /v1/agents/:agentId/registration-signature?wallet=   200 ready / 202 pending / 403 rejected (flat)
- *   GET  /v1/projects/:address/quote?side=mint|burn&count=    curve quote at one pinned block
+ *   GET  /v1/projects/:address/quote?side=mint|sell|burn&count=   curve quote at one pinned block (sell == burn quote)
+ *   GET  /v1/projects/:address/sell-tx?wallet=&count=|tokenIds=&slippageBps=   ready sell calldata (+ baw command)
  *   POST /v1/promotions/code                                  promotion code + 403 not_registered / not_holder
  *   POST /v1/promotions/submit                                promoter submits its post URL (verified via FxTwitter)
  *   POST /v1/agents/eligibility-posts                         wallet-signed fresh eligibility post URLs (30-day re-check)
@@ -332,8 +333,10 @@ export function toQuote(project: string, side: "mint" | "burn", count: number, b
 
 async function quoteRoute(ctx: AppContext, address: string, q: { side?: string; count?: string }) {
   const project = addrParam(address);
-  const side = q.side ?? "mint";
-  if (side !== "mint" && side !== "burn") throw new ApiError(400, "bad_side", "side must be mint or burn");
+  // "sell" is the v2 name of the curve exit (BondingNFT.sell); "burn" kept as an alias. Same quote either way.
+  const rawSide = q.side ?? "mint";
+  if (rawSide !== "mint" && rawSide !== "burn" && rawSide !== "sell") throw new ApiError(400, "bad_side", "side must be mint, sell or burn");
+  const side: "mint" | "burn" = rawSide === "mint" ? "mint" : "burn";
   const count = q.count === undefined || q.count === "" ? NaN : Number(q.count);
   if (!Number.isSafeInteger(count) || count <= 0) throw new ApiError(400, "bad_amount", "count must be a positive integer");
   const { db, t } = ctx.database;
@@ -349,12 +352,65 @@ async function quoteRoute(ctx: AppContext, address: string, q: { side?: string; 
   return toQuote(project, side, count, blockNumber, { virtualBnb: BigInt(vb), virtualToken: BigInt(vt), totalSupply: BigInt(ts), feeBps: Number(fee) });
 }
 
+
+// ------------------------------------------------------------------ sell calldata
+
+/** Pure builder for sell calldata. v2 projects use BondingNFT.sell (no outgoing NFT log in the seller's tx, so
+ *  Binance Agentic Wallet previews pass); v1 projects only have burn, which the agentic-wallet risk engine blocks. */
+export function buildSellTx(project: string, wallet: string, version: number, tokenIds: bigint[], net: bigint, slippageBps: number) {
+  const minOut = (net * BigInt(10_000 - slippageBps)) / 10_000n;
+  const method = version >= 2 ? ("sell" as const) : ("burn" as const);
+  const data = encodeFunctionData({ abi: BondingNFTAbi, functionName: method, args: [tokenIds, minOut] });
+  const to = checksum(project);
+  return {
+    project: to, wallet: checksum(wallet), version, method, tokenIds: tokenIds.map(String), minOut: minOut.toString(), slippageBps,
+    tx: { to, value: "0", data },
+    baw: `baw contract-call preview --binanceChainId 56 --from ${checksum(wallet)} --to ${to} --value 0 --inputData ${data} --json`,
+    ...(method === "burn" ? { warning: "v1 project: only burn() exists; Binance Agentic Wallet blocks it (risk 351803). Projects launched from BondingNFT v2 support sell()." } : {}),
+  };
+}
+
+async function sellTxRoute(ctx: AppContext, address: string, q: { wallet?: string; count?: string; tokenIds?: string; slippageBps?: string }) {
+  const project = addrParam(address);
+  const wallet = addrParam(q.wallet);
+  const slippageBps = q.slippageBps === undefined || q.slippageBps === "" ? 100 : Number(q.slippageBps);
+  if (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 5000) throw new ApiError(400, "bad_slippage", "slippageBps must be an integer 0..5000");
+  const isProject = await ctx.pc.readContract({ address: ctx.addresses.factory, abi: LaunchFactoryAbi, functionName: "isProject", args: [checksum(project)] }).catch(() => false);
+  if (!isProject) throw new ApiError(404, "not_found", "unknown project");
+  let ids: bigint[];
+  if (q.tokenIds) {
+    if (!/^\d+(,\d+)*$/.test(q.tokenIds)) throw new ApiError(400, "bad_token_ids", "tokenIds must be comma-separated integers");
+    ids = [...new Set(q.tokenIds.split(","))].map((x) => BigInt(x));
+  } else {
+    const count = q.count === undefined || q.count === "" ? 1 : Number(q.count);
+    if (!Number.isSafeInteger(count) || count <= 0 || count > 100) throw new ApiError(400, "bad_amount", "count must be 1..100");
+    const { db, t } = ctx.database;
+    const rows = await db.select({ id: t.nftTokens.tokenId, owner: t.nftTokens.owner }).from(t.nftTokens).where(eq(t.nftTokens.project, project));
+    ids = rows.filter((r) => lc(r.owner) === wallet).map((r) => BigInt(r.id)).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0)).slice(0, count);
+    if (ids.length < count) throw new ApiError(400, "not_enough_nfts", `wallet holds ${ids.length} indexed NFT(s) of this project; pass tokenIds= explicitly`);
+  }
+  if (ids.length === 0 || ids.length > 100) throw new ApiError(400, "bad_amount", "1..100 token ids");
+  const owners = await Promise.all(ids.map((id) => ctx.pc.readContract({ address: checksum(project), abi: BondingNFTAbi, functionName: "ownerOf", args: [id] }).catch(() => null)));
+  const notOwned = ids.filter((_, i) => !owners[i] || lc(owners[i] as string) !== wallet);
+  if (notOwned.length) throw new ApiError(400, "not_owner", `wallet does not own token(s) ${notOwned.join(",")}`);
+  const version = Number(await ctx.pc.readContract({ address: checksum(project), abi: BondingNFTAbi, functionName: "VERSION" }).catch(() => 1n));
+  const blockNumber = await ctx.pc.getBlockNumber({ cacheTime: 0 });
+  const read = (functionName: "virtualBnb" | "virtualToken" | "totalSupply" | "feeBps") =>
+    ctx.pc.readContract({ address: checksum(project), abi: BondingNFTAbi, functionName, blockNumber }) as Promise<bigint | number>;
+  const [vb, vt, ts, fee] = await Promise.all([read("virtualBnb"), read("virtualToken"), read("totalSupply"), read("feeBps")]);
+  const quote = toQuote(project, "burn", ids.length, blockNumber, { virtualBnb: BigInt(vb), virtualToken: BigInt(vt), totalSupply: BigInt(ts), feeBps: Number(fee) });
+  return { ...buildSellTx(project, wallet, version, ids, BigInt(quote.total), slippageBps), quote: { ...quote, side: "sell" } };
+}
+
 // ------------------------------------------------------------------ promotion code
 
 /** Frontend base URL for share links (config PUBLIC_APP_URL; the env var is read directly for callers without a ctx). */
 export const PUBLIC_APP_URL = (process.env.PUBLIC_APP_URL ?? "http://localhost:5173").replace(/\/+$/, "");
-/** Frontend route of a project page (frontend/src/App.tsx: /project/:address). */
-export const projectLink = (base: string, address: string) => `${base.replace(/\/+$/, "")}/project/${address}`;
+/** Share links follow the deployed frontend's router: "hash" (default; the live builds use HashRouter) or "path". */
+export const PUBLIC_APP_ROUTER: "hash" | "path" = process.env.PUBLIC_APP_ROUTER === "path" ? "path" : "hash";
+/** Frontend route of a project page (frontend/src/App.tsx: /project/:address) → `${base}/#/project/0x…` (hash) or `${base}/project/0x…`. */
+export const projectLink = (base: string, address: string, router: "hash" | "path" = PUBLIC_APP_ROUTER) =>
+  `${base.replace(/\/+$/, "")}${router === "hash" ? "/#" : ""}/project/${address}`;
 
 /** PromotionCodeResponse (contract #7). */
 export function toPromotionCode(
@@ -450,6 +506,9 @@ export function registerSdkRoutes(app: FastifyInstance, ctx: AppContext) {
   });
   app.get<{ Params: { address: string }; Querystring: { side?: string; count?: string } }>("/v1/projects/:address/quote", async (req) =>
     quoteRoute(ctx, req.params.address, req.query),
+  );
+  app.get<{ Params: { address: string }; Querystring: { wallet?: string; count?: string; tokenIds?: string; slippageBps?: string } }>("/v1/projects/:address/sell-tx", async (req) =>
+    sellTxRoute(ctx, req.params.address, req.query),
   );
   app.post("/v1/promotions/code", async (req) => promotionCodeRoute(ctx, req.body));
   app.post("/v1/promotions/submit", async (req) => {

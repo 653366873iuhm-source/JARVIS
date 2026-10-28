@@ -328,7 +328,16 @@ describe("AgentPad backend e2e", () => {
     const { db, t } = ctx.database;
     const { eq, and } = await import("drizzle-orm");
     const ids = (await db.select().from(t.nftTokens).where(and(eq(t.nftTokens.project, P1.toLowerCase()), eq(t.nftTokens.owner, C.address.toLowerCase())))).slice(0, 5).map((x) => BigInt(x.tokenId));
-    await send(C, P1, encodeFunctionData({ abi: BondingNFTAbi, functionName: "burn", args: [ids, 0n] }));
+    // v2: sell via the backend's ready-made calldata (BondingNFT.sell, no outgoing NFT log in the seller's tx)
+    const st = await inject("GET", `/v1/projects/${P1}/sell-tx?wallet=${C.address}&tokenIds=${ids.join(",")}&slippageBps=50`);
+    expect(st.status).toBe(200);
+    expect(st.body).toMatchObject({ method: "sell", version: 2, tokenIds: ids.map(String) });
+    expect(st.body.tx.data).toBe(encodeFunctionData({ abi: BondingNFTAbi, functionName: "sell", args: [ids, BigInt(st.body.minOut)] }));
+    expect(JSON.stringify((await inject("GET", `/v1/projects/${P1}/sell-tx?wallet=${A.address}&tokenIds=${ids[0]}`)).body)).toContain("not_owner");
+    expect((await inject("GET", `/v1/projects/${P1}/quote?side=sell&count=5`)).body.total).toBe(st.body.quote.total);
+    await send(C, P1, st.body.tx.data);
+    await indexer.syncToHead();
+    expect((await inject("GET", `/v1/projects/${P1}/holders?limit=500`)).body.find((h: any) => h.wallet === C.address.toLowerCase()).count).toBe(15);
     await mintMany(C, P1, 10_000 - 300 - 4000 - 3000 - 100 - 15);
     expect(Number(await read(P1, BondingNFTAbi, "phase"))).toBe(1);
     await indexer.syncToHead();

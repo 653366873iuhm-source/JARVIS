@@ -16,6 +16,7 @@ import { issueCredentialVoucher } from "../../services/credential.js";
 import { getMining } from "../../services/mining.js";
 import { ApiError } from "../../services/registration.js";
 import { checksum } from "../../lib/util.js";
+import { normalizeRef } from "../../services/invites.js";
 
 export const OFFICIAL_X = "https://x.com/ChyAI_Official";
 export const PINNED_POST = "https://x.com/ChyAI_Official/status/2115430735167607129";
@@ -27,10 +28,12 @@ export function apiBase(req: FastifyRequest): string {
 }
 
 /** The copyable one-command prompt a user gives their AI agent (also embedded in the site). */
-export function agentPrompt(base: string) {
+export function agentPrompt(base: string, ref?: string | null) {
+  const r = ref ? normalizeRef(ref) : null;
   return [
     `请用我的 Binance Agentic Wallet（baw CLI）按 ${base}/agent.md 的步骤，帮我跑完 ChyAI 空投全流程：申请 → 核验 → mint 凭证 → 开始挖矿 → 每日签到。`,
     `我的 X 用户名：<你的X用户名>；我引用转发/回复 ChyAI 置顶帖的链接：<帖子链接>。`,
+    ...(r ? [`邀请人：${r}（申请时在 claim 里带上 "ref":"${r}"）。`] : []),
     `钱包和 .ai 名称从 baw 读取。每笔交易和签名先给我看 preview，我确认后再 execute；之后每天自动签到一次。`,
   ].join("\n");
 }
@@ -65,8 +68,10 @@ Ask the user for the X handle and the link of that quote/reply.
 ## 2. Apply (agent)
 \`\`\`
 curl -s -X POST ${api}/airdrop/claim -H 'content-type: application/json' \\
-  -d '{"xHandle":"<handle>","wallet":"<WALLET>","agentName":"<name>.ai","repostUrl":"https://x.com/<handle>/status/<id>"}'
+  -d '{"xHandle":"<handle>","wallet":"<WALLET>","agentName":"<name>.ai","repostUrl":"https://x.com/<handle>/status/<id>","ref":"<inviter>.ai"}'
 \`\`\`
+\`ref\` is optional: the inviter's .ai name (or wallet) from the user's invite link (\`…/airdrop?ref=<inviter>.ai\`).
+Leave it out when the user has none. It is bound once, on the first application; the response's \`invite\` says whether it was bound.
 201 = new claim, 200 = already applied (returns the same claim; \`existing:true\`). \`status\`: \`approved\` → step 3;
 \`pending_verification\` → poll \`GET ${api}/airdrop/status?wallet=<WALLET>\` every 10 min; 422 → read \`error.message\`, fix the link, submit again.
 
@@ -97,6 +102,11 @@ curl -s -X POST ${api}/mining/checkin -H 'content-type: application/json' \\
   -d '{"wallet":"<WALLET>","signType":"eip712","signature":"<signature>","signatureRecovery":"<signatureRecovery>"}'
 \`\`\`
 409 \`already_checked_in\` = done for today. Repeat daily (schedule it if you can).
+
+## 6. Invites (optional)
+Once the credential is minted, the user has an invite link: \`GET ${api}/airdrop/invites/<WALLET>\` → \`link\`
+(\`…/airdrop?ref=<name>.ai\`). Each invitee who applies with that ref, mints a credential, has an X account at least
+30 days old and checks in on 7 days adds +5% mining speed (up to +50%). No self-invites. Leaderboard: \`GET ${api}/airdrop/invites/leaderboard\`.
 
 ## One call for the current state
 \`GET ${api}/agent/flow?wallet=<WALLET>\` → \`steps[]\` (done / todo / waiting / blocked) and \`next\` with the exact command.
@@ -156,6 +166,6 @@ export function registerAgentFlowRoutes(app: FastifyInstance, ctx: AppContext) {
     reply.header("content-type", "text/markdown; charset=utf-8").header("cache-control", "public, max-age=300").send(agentMarkdown(apiBase(req), ctx.cfg.CHAIN_ID));
   app.get("/agent.md", md);
   app.get("/v1/agent.md", md);
-  app.get("/v1/agent/prompt", async (req) => ({ prompt: agentPrompt(apiBase(req)), instructions: `${apiBase(req)}/agent.md` }));
+  app.get<{ Querystring: { ref?: string } }>("/v1/agent/prompt", async (req) => ({ prompt: agentPrompt(apiBase(req), req.query.ref), instructions: `${apiBase(req)}/agent.md` }));
   app.get<{ Querystring: { wallet?: string } }>("/v1/agent/flow", async (req) => agentFlow(ctx, String(req.query.wallet ?? ""), apiBase(req)));
 }

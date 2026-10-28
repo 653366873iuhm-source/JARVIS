@@ -146,6 +146,19 @@ export const ConfigSchema = z.object({
   MINING_CHECKIN_POINTS: num(5), // daily 签到 points
   MINING_CREDIT_CACHE_SEC: num(60), // cache of on-chain creditOf reads
   MINING_ACTIVATE_SWEEP_MS: num(120_000), // approved claims without a mining account: start mining once the credential is minted (0 = off)
+  // ---- airdrop invites (+5% mining speed per qualified invitee, capped at +50%)
+  INVITE_BOOST_PER_INVITEE: num(0.05),
+  INVITE_BOOST_CAP: num(0.5),
+  INVITE_MAX_PER_INVITER: num(50), // max invitees that can be bound to one inviter
+  INVITE_MIN_CHECKIN_DAYS: num(7), // invitee must check in on this many distinct UTC days
+  INVITE_MIN_X_AGE_DAYS: num(30), // invitee X account must be at least this old
+
+  // ---- test data hidden from public views (home, ticker / live activity, leaderboards, stats). Not deleted.
+  // Defaults: mainnet smoke-test projects CHYTEST + CHYSELL and the smoke-test wallet.
+  HIDE_PROJECTS: addrList.transform((v) => (v.length ? v : ["0xe69af8599eda309621bf6bffe64f241df9786d28", "0xbb41b9789cf42bd2752c172170d2efae857f53eb"])),
+  HIDE_WALLETS: addrList.transform((v) => (v.length ? v : ["0x49e6fb3812fdfd67edfe17259f03ccbe59f39bce"])),
+  // share links: deployed frontends use hash routing (/#/project/..)
+  PUBLIC_APP_ROUTER: z.enum(["hash", "path"]).default("hash"),
 
   // ---- promotion gate
   PROMO_POLL_MS: num(30000),

@@ -12,6 +12,7 @@
  *   GET /v1/agents/:query                  AgentProfile        (wallet or `.ai` id; replaces the old /v1/agents/:wallet)
  *   WS  /v1/ws                             subscribe messages + Trade payload (handleTradeSocket)
  */
+import { isHiddenActivity, isHiddenProject, isHiddenWallet } from "../../services/hidden.js";
 import type { FastifyInstance } from "fastify";
 import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import type { AppContext } from "../../context.js";
@@ -261,6 +262,7 @@ export async function feLeaderboard(ctx: AppContext, q: { range?: string; limit?
   const price = new Map(projects.map((p) => [p.address, BigInt(p.priceWei)] as const));
   const book = new Map<string, Map<string, { flow: bigint; net: number }>>();
   for (const tr of trades) {
+    if (isHiddenProject(ctx.cfg, tr.p)) continue;
     let m = book.get(tr.w);
     if (!m) book.set(tr.w, (m = new Map()));
     const e = m.get(tr.p) ?? { flow: 0n, net: 0 };
@@ -278,9 +280,9 @@ export async function feLeaderboard(ctx: AppContext, q: { range?: string; limit?
   const promo = new Map<string, number>();
   for (const p of posts) if (p.s !== "duplicate_text") promo.set(p.w, (promo.get(p.w) ?? 0) + 1);
   const rows = agents
-    .filter((a) => !a.removed)
+    .filter((a) => !a.removed && !isHiddenWallet(ctx.cfg, a.wallet))
     .map((a) => {
-      const launched = projects.filter((p) => p.launcher === a.wallet);
+      const launched = projects.filter((p) => p.launcher === a.wallet && !isHiddenProject(ctx.cfg, p.address));
       let pnl = 0n;
       let wins = 0;
       const m = book.get(a.wallet) ?? new Map();
@@ -409,6 +411,7 @@ export function handleTradeSocket(ctx: AppContext, socket: { readyState: number;
   };
   const onTrade = (raw: any) => {
     if (!tradesOn || (only && raw.project !== only)) return;
+    if (!only && isHiddenActivity(ctx.cfg, raw.project, raw.trader)) return; // test data: hidden from the site-wide feed
     chain = chain.then(async () => {
       const { db, t } = ctx.database;
       const [a] = await db.select({ id: t.agents.agentId }).from(t.agents).where(eq(t.agents.wallet, raw.trader)).catch(() => []);

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../../context.js";
 import { ApiError } from "../../services/registration.js";
 import { issueCredentialVoucher } from "../../services/credential.js";
+import { getInvites, inviteLeaderboard } from "../../services/invites.js";
 import { adminTestApprove, airdropVerifySweep, resolveAgentName } from "../../services/airdrop.js";
 import { AIRDROP_STATUSES, RateLimiter, airdropClaimsCsv, airdropStats, airdropStatus, claimAirdrop, listAirdropClaims, setAirdropStatus, type AirdropStatus } from "../../services/airdrop.js";
 
@@ -29,7 +30,7 @@ export function registerAirdropRoutes(app: FastifyInstance, ctx: AppContext, adm
     const b = (req.body ?? {}) as Record<string, unknown>;
     for (const k of ["xHandle", "wallet", "repostUrl", "agentName"])
       if (typeof b[k] !== "string") throw new ApiError(400, "validation_error", "xHandle, wallet, repostUrl and agentName are required strings");
-    const r = await claimAirdrop(ctx, { xHandle: b.xHandle as string, wallet: b.wallet as string, repostUrl: b.repostUrl as string, agentName: b.agentName as string }, ip);
+    const r = await claimAirdrop(ctx, { xHandle: b.xHandle as string, wallet: b.wallet as string, repostUrl: b.repostUrl as string, agentName: b.agentName as string, ref: typeof b.ref === "string" ? b.ref : undefined }, ip);
     if (r.existing) {
       perIp.refund(ip); // same person re-submitting: return their claim, don't burn their attempts
       global.refund("all");
@@ -47,6 +48,10 @@ export function registerAirdropRoutes(app: FastifyInstance, ctx: AppContext, adm
     }
     return resolveAgentName(ctx, String(req.query.name ?? ""));
   });
+
+  // public: invites — leaderboard + "my invites" (link, invitees, mining boost)
+  app.get<{ Querystring: { limit?: string } }>("/v1/airdrop/invites/leaderboard", async (req) => inviteLeaderboard(ctx, Number(req.query.limit ?? 50) || 50));
+  app.get<{ Params: { wallet: string } }>("/v1/airdrop/invites/:wallet", async (req) => getInvites(ctx, req.params.wallet));
 
   // public: claim status of a wallet (+ on-chain credential state)
   app.get<{ Querystring: { wallet?: string } }>("/v1/airdrop/status", async (req) => airdropStatus(ctx, String(req.query.wallet ?? "")));

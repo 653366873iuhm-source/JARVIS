@@ -13,6 +13,7 @@ import { ApiError } from "./registration.js";
 import { isAddressEqual } from "viem";
 import { checksum, isAddr, lc, nowSec, parseTweetId, uuid } from "../lib/util.js";
 import { readCredential } from "./credential.js";
+import { bindInvite } from "./invites.js";
 
 export const AIRDROP_AMOUNT = 1000;
 export const AIRDROP_STATUSES = ["pending_verification", "approved", "rejected"] as const;
@@ -186,6 +187,8 @@ export interface ClaimInput {
   wallet: string;
   repostUrl: string;
   agentName: string;
+  /** inviter (.ai name or wallet) from the invite link `?ref=` — optional */
+  ref?: string;
 }
 
 export async function claimAirdrop(ctx: AppContext, body: ClaimInput, ip = "") {
@@ -213,7 +216,10 @@ export async function claimAirdrop(ctx: AppContext, body: ClaimInput, ip = "") {
     return null;
   };
   const existing = dupe(await findRows());
-  if (existing) return resubmitClaim(ctx, existing, repostUrl);
+  if (existing) {
+    const r = await resubmitClaim(ctx, existing, repostUrl);
+    return { ...r, invite: await bindInvite(ctx, { wallet: r.wallet, xHandle: r.xHandle, agentId: r.agentId ?? agentId }, body.ref) };
+  }
   // the .ai name must resolve (on-chain Agent ID registry) to exactly the submitted wallet
   await assertAgentIdOwner(ctx, agentId, wallet);
   // auto-verify the submitted post against the pinned post (quote / reply by the same handle)
@@ -230,13 +236,14 @@ export async function claimAirdrop(ctx: AppContext, body: ClaimInput, ip = "") {
   } catch (e) {
     // concurrent duplicate (double click / two tabs) hit the unique index → same person: return their claim
     const again = dupe(await findRows());
-    if (again) return resubmitClaim(ctx, again, repostUrl);
+    if (again) return { ...(await resubmitClaim(ctx, again, repostUrl)), invite: null };
     throw e;
   }
   const { claimed } = await airdropStats(ctx);
   return {
     id: row.id, xHandle, wallet, agentId, repostUrl, amount: AIRDROP_AMOUNT, status: row.status as AirdropStatus, reason: row.reviewReason,
     message: reviewMessage(row.status, row.reviewReason), createdAt: now, claimed, existing: false, next: nextStep(row.status),
+    invite: await bindInvite(ctx, { wallet, xHandle, agentId }, body.ref),
   };
 }
 
