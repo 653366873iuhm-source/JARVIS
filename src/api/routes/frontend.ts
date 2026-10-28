@@ -8,6 +8,7 @@
  *   GET /v1/projects/:address/nfts         NftItem[]
  *   GET /v1/agents/leaderboard?range=      LeaderboardRow[]    (registered before /v1/agents/:query)
  *   GET /v1/stats                          PlatformStats (projects, volume, fees, charity.totalDonatedWei)
+ *   GET /v1/config                         PublicConfig (launchGate thresholds, chainId)
  *   GET /v1/agents/:query                  AgentProfile        (wallet or `.ai` id; replaces the old /v1/agents/:wallet)
  *   WS  /v1/ws                             subscribe messages + Trade payload (handleTradeSocket)
  */
@@ -16,7 +17,7 @@ import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import type { AppContext } from "../../context.js";
 import { ApiError } from "../../services/registration.js";
 import { listProjects, recentTrades } from "../../services/market.js";
-import { platformStats } from "../../services/stats.js";
+import { platformStats, publicConfig } from "../../services/stats.js";
 import { clockNow } from "../../services/indexer.js";
 import { DEFAULT_FEE_BPS, PHASES, poolSwapToTrade, toTrade, type PoolSwapRowLike, type TradeRowLike } from "../mappers.js";
 import { quoteSell } from "../../lib/curve.js";
@@ -461,6 +462,8 @@ export async function registerFrontendRoutes(app: FastifyInstance, ctx: AppConte
     feNfts(ctx, addrParam(req.params.address), num(req.query.limit)),
   );
   app.get("/v1/stats", async () => platformStats(ctx));
+  // public: current launch-gate thresholds (the site reads these instead of hard-coding them)
+  app.get("/v1/config", async () => publicConfig(ctx));
   // must be registered before /v1/agents/:query
   app.get<{ Querystring: Record<string, string> }>("/v1/agents/leaderboard", async (req) => feLeaderboard(ctx, { range: req.query.range, limit: num(req.query.limit) }));
   app.get<{ Params: { query: string } }>("/v1/agents/:query", async (req) => feAgentProfile(ctx, req.params.query));

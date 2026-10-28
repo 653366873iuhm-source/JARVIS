@@ -28,7 +28,7 @@ const WINDOW = 30 * 86400;
 
 /**
  * Launch eligibility (ARCHITECTURE.md), with no paid X API:
- *   followers >= 5000 and account age (joined) >= 90 days — from the FxTwitter user lookup;
+ *   followers >= 1200 and account age (joined) >= 30 days (defaults; ELIG_MIN_FOLLOWERS / ELIG_MIN_ACCOUNT_AGE_DAYS) — from the FxTwitter user lookup;
  *   >= 10 posts in the last 30 days and average engagement >= 0.5% — over the post URLs the agent SUBMITS
  *   (its own original posts / quotes / replies, reposts excluded), each looked up by id. A post's rate is
  *   (likes + reposts + replies) / followers; the average is over the counted posts.

@@ -690,13 +690,13 @@ describe("AgentPad backend e2e", () => {
 
   it("30-day requalification revokes launch rights of agents that no longer qualify", async () => {
     const u = await x.getUserByUsername("launcher_bot");
-    u!.followers = 1200; // dropped below 5000
+    u!.followers = 1100; // dropped below 1200
     const res = (await inject("POST", "/v1/admin/jobs/requalify/run", { now: Math.floor(Date.now() / 1000) + 31 * 86400 }, ADMIN)).body;
     expect(res.checked).toBe(1);
     expect(res.results[0].wallet).toBe(L.address.toLowerCase());
     expect(res.results[0].eligible).toBe(false);
     // user re-fetched (followers) + stored post URLs re-fetched: 31 days on, they're all outside the 30-day window
-    expect(res.results[0].reasons.join(" ")).toContain("followers 1200 < 5000");
+    expect(res.results[0].reasons.join(" ")).toContain("followers 1100 < 1200");
     expect(res.results[0].reasons.join(" ")).toContain("submitted posts from the last 30d 0 < 10");
     expect(res.results[0].tx.status).toBe("confirmed");
     expect(await read(dep.contracts.AgentRegistry, AgentRegistryAbi, "canLaunch", [L.address])).toBe(false);

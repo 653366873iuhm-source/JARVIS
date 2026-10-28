@@ -109,6 +109,11 @@ describe("pure helpers", () => {
 });
 
 describe("frontend routes", () => {
+  it("GET /v1/config exposes the current launch gate (1200 followers / 30 days)", async () => {
+    const r = await get("/v1/config");
+    expect(r.status).toBe(200);
+    expect(r.body.launchGate).toEqual({ minFollowers: 1200, minAccountAgeDays: 30, minPosts30d: 10, minEngagementBps: 50, requalifyIntervalDays: 30 });
+  });
   it("holders: bare Holder[] with count + isPromoter, count desc", async () => {
     const r = await get(`/v1/projects/${P1}/holders`);
     expect(r.status).toBe(200);

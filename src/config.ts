@@ -100,8 +100,8 @@ export const ConfigSchema = z.object({
   FXTWITTER_MAX_RETRIES: num(3),
 
   // ---- eligibility (launch)
-  ELIG_MIN_FOLLOWERS: num(5000),
-  ELIG_MIN_ACCOUNT_AGE_DAYS: num(90),
+  ELIG_MIN_FOLLOWERS: num(1200),
+  ELIG_MIN_ACCOUNT_AGE_DAYS: num(30),
   ELIG_MIN_POSTS_30D: num(10),
   ELIG_MIN_ENGAGEMENT_BPS: num(50), // 0.5% = 50 bps
   ELIG_MAX_POST_URLS: num(50), // max eligibility post URLs accepted per submission

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, keccak256, concat, toBytes } from "viem";
 import { StandardMerkleTree } from "@openzeppelin/merkle-tree";
 import { normalizePostText, similarity } from "../../src/lib/similarity.js";
-import { computeEligibility } from "../../src/services/eligibility.js";
+import { computeEligibility, thresholdsFromConfig } from "../../src/services/eligibility.js";
+import { loadConfig } from "../../src/config.js";
 import { postScore, proRata, epochOf } from "../../src/services/rewards.js";
 import { quoteBuy, quoteSell, nftPrice, VIRTUAL_BNB0, VIRTUAL_TOKEN0, TOKENS_PER_NFT } from "../../src/lib/curve.js";
 import { handleHash, parseTweetId, hmacCode, normHandle } from "../../src/lib/util.js";
@@ -10,7 +11,7 @@ import { projectTag } from "../../src/services/indexer.js";
 import { promoterTree } from "../../src/services/promotion.js";
 import type { XPost, XUser } from "../../src/providers/x/types.js";
 
-const th = { minFollowers: 5000, minAccountAgeDays: 90, minPosts30d: 10, minEngagementBps: 50 };
+const th = { minFollowers: 1200, minAccountAgeDays: 30, minPosts30d: 10, minEngagementBps: 50 };
 const now = 1_800_000_000;
 const user = (o: Partial<XUser> = {}): XUser => ({ id: "1", username: "a", createdAt: now - 200 * 86400, followers: 10_000, ...o });
 const posts = (n: number, eng: number, age = 86400): XPost[] =>
@@ -37,9 +38,18 @@ describe("eligibility", () => {
     expect(r.engagementBps).toBe(50);
   });
   it("lists every failing criterion", () => {
-    const r = computeEligibility(user({ followers: 4999, createdAt: now - 30 * 86400 }), posts(9, 10), now, th);
+    const r = computeEligibility(user({ followers: 1199, createdAt: now - 29 * 86400 }), posts(9, 2), now, th);
     expect(r.eligible).toBe(false);
     expect(r.reasons.length).toBe(4);
+    expect(r.reasons).toContain("followers 1199 < 1200");
+    expect(r.reasons).toContain("account age 29d < 30d");
+  });
+  it("launch gate defaults: >= 1200 followers and >= 30 days pass at the boundary", () => {
+    const d = thresholdsFromConfig(loadConfig({ NODE_ENV: "test" }));
+    expect(d).toMatchObject({ minFollowers: 1200, minAccountAgeDays: 30, minPosts30d: 10, minEngagementBps: 50 });
+    const r = computeEligibility(user({ followers: 1200, createdAt: now - 30 * 86400 }), posts(10, 12), now, d); // 12/1200 = 1%
+    expect(r.reasons.filter((x) => /followers|account age/.test(x))).toEqual([]);
+    expect(r.eligible).toBe(true);
   });
   it("ignores reposts and posts older than 30 days", () => {
     const p = [...posts(9, 100), ...posts(5, 100, 31 * 86400), { ...posts(1, 100)[0]!, id: "rt", isRepost: true }];

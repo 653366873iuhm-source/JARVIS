@@ -81,3 +81,18 @@ export async function platformStats(ctx: AppContext, opts: { maxAgeMs?: number }
   cache = { at: Date.now(), key: ctx, v };
   return v;
 }
+
+/** Public config (GET /v1/config): current launch-gate thresholds, so the site never hard-codes them. */
+export function publicConfig(ctx: AppContext) {
+  const c = ctx.cfg;
+  return {
+    chainId: c.CHAIN_ID,
+    launchGate: {
+      minFollowers: c.ELIG_MIN_FOLLOWERS,
+      minAccountAgeDays: c.ELIG_MIN_ACCOUNT_AGE_DAYS,
+      minPosts30d: c.ELIG_MIN_POSTS_30D,
+      minEngagementBps: c.ELIG_MIN_ENGAGEMENT_BPS,
+      requalifyIntervalDays: c.REQUALIFY_INTERVAL_DAYS,
+    },
+  };
+}
