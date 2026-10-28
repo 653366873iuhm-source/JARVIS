@@ -82,8 +82,8 @@ export const EligibilityPostsTypes = {
 
 // ---------------------------------------------------------------- ChyAICredential (airdrop credential v2)
 /** Must match ChyAICredential: EIP712("ChyAICredential", "2"), verifyingContract = credential. */
-export const credentialDomain = (chainId: number, credential: Address) =>
-  ({ name: "ChyAICredential", version: "2", chainId, verifyingContract: credential }) as const;
+export const credentialDomain = (chainId: number, credential: Address, version: "2" | "3" = "2") =>
+  ({ name: "ChyAICredential", version, chainId, verifyingContract: credential }) as const;
 
 /** Mint(address to,bytes32 xHandleHash,bytes32 agentId,uint256 deadline) */
 export const CredentialMintTypes = {

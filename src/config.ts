@@ -120,6 +120,14 @@ export const ConfigSchema = z.object({
 
   // ---- ChyAI airdrop credential (soulbound ChyAICredential). Unset = not deployed: no vouchers, nobody mines.
   CREDENTIAL_ADDRESS: addr.optional(),
+  // Extra credential contracts that also count as valid (e.g. ChyAICredentialV3 once deployed). Comma-separated.
+  // Holders of ANY listed contract (plus CREDENTIAL_ADDRESS) mine, so no existing holder loses credit.
+  CREDENTIAL_ADDRESSES: addrList,
+  // Contract new mint vouchers target (default CREDENTIAL_ADDRESS) and its voucher format: 2 = ChyAICredential
+  // (AgentRegistry register step + mint(xHandleHash, agentId, ...)), 3 = ChyAICredentialV3 (.ai checked on-chain,
+  // mint(label, xHandleHash, ...), no registry step).
+  CREDENTIAL_MINT_ADDRESS: addr.optional(),
+  CREDENTIAL_MINT_VERSION: z.enum(["2", "3"]).default("2"),
   CREDENTIAL_VOUCHER_TTL_SEC: num(86400),
   // auto-approval: the submitted post must quote or reply to the pinned post (checked via FxTwitter)
   AIRDROP_PINNED_TWEET_ID: z.string().regex(/^\d{1,25}$/).optional(),

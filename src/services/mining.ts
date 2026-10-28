@@ -15,7 +15,7 @@ import type { AppContext } from "../context.js";
 import { checksum, lc, nowSec, uuid } from "../lib/util.js";
 import { ApiError } from "./registration.js";
 import { normalizeWallet } from "./airdrop.js";
-import { readCredential } from "./credential.js";
+import { credentialAddresses, credentialMintAddress, readCredential } from "./credential.js";
 import { verifyAgentSignature } from "./sigverify.js";
 
 const DAY = 86400;
@@ -241,8 +241,9 @@ export async function miningStats(ctx: AppContext) {
     activeMiners: active,
     totalPoints: fmtE8(total),
     checkinsToday: Number(ci?.n ?? 0),
-    credentialConfigured: !!c.CREDENTIAL_ADDRESS,
-    credentialAddress: c.CREDENTIAL_ADDRESS ?? null,
+    credentialConfigured: credentialAddresses(c).length > 0,
+    credentialAddress: credentialMintAddress(c),
+    credentialAddresses: credentialAddresses(c),
     rules: {
       pointsPer1000CreditPerDay: c.MINING_POINTS_PER_1000_CREDIT_DAY,
       launchBoost: c.MINING_LAUNCH_BOOST,

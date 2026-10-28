@@ -12,13 +12,39 @@ import { CredentialMintTypes, RegisterTypes, credentialDomain, registryDomain } 
 import { agentIdHash, checksum, handleHash, lc } from "../lib/util.js";
 import { ApiError } from "./registration.js";
 
+export interface CredentialHolding {
+  address: string;
+  active: boolean;
+  credit: number;
+  tokenId: number;
+  used: boolean;
+}
 export interface CredentialState {
-  configured: boolean; // CREDENTIAL_ADDRESS set and contract code present
-  address: string | null;
-  active: boolean; // isActiveHolder
-  credit: number; // creditOf (0 = none / revoked)
-  tokenId: number; // credentialOf
-  used: boolean; // walletUsed (minted at least once, even if revoked)
+  configured: boolean; // at least one credential contract set and deployed
+  address: string | null; // contract of the live credential (else the mint contract)
+  active: boolean; // isActiveHolder on ANY valid credential contract
+  credit: number; // creditOf of the live credential (max if several; 0 = none / revoked)
+  tokenId: number; // credentialOf on that contract
+  used: boolean; // walletUsed on any contract (minted at least once, even if revoked)
+  holdings?: CredentialHolding[]; // per-contract detail (only contracts with code)
+}
+
+type CredCfg = { CREDENTIAL_ADDRESS?: string; CREDENTIAL_ADDRESSES?: string[]; CREDENTIAL_MINT_ADDRESS?: string };
+/** All contracts whose credentials count: CREDENTIAL_ADDRESS, CREDENTIAL_MINT_ADDRESS, then CREDENTIAL_ADDRESSES (deduped). */
+export function credentialAddresses(c: CredCfg): Address[] {
+  const seen = new Set<string>();
+  const out: Address[] = [];
+  for (const a of [c.CREDENTIAL_ADDRESS, c.CREDENTIAL_MINT_ADDRESS, ...(c.CREDENTIAL_ADDRESSES ?? [])]) {
+    if (!a || seen.has(a.toLowerCase())) continue;
+    seen.add(a.toLowerCase());
+    out.push(checksum(a));
+  }
+  return out;
+}
+/** Contract new mint vouchers target (CREDENTIAL_MINT_ADDRESS, else CREDENTIAL_ADDRESS). */
+export function credentialMintAddress(c: CredCfg): Address | null {
+  const a = c.CREDENTIAL_MINT_ADDRESS ?? c.CREDENTIAL_ADDRESS;
+  return a ? checksum(a) : null;
 }
 
 const ZERO32 = "0x" + "0".repeat(64);
@@ -40,22 +66,49 @@ async function hasCode(ctx: AppContext, address: Address): Promise<boolean> {
   return ok;
 }
 
-/** Reads the wallet's credential. CREDENTIAL_ADDRESS unset (or no code there yet) → "none" for everyone. */
+/**
+ * Reads the wallet's credential across every valid contract (v2 + v3 …): active on any = active. No contract set
+ * (or no code there yet) → "none" for everyone.
+ */
 export async function readCredential(ctx: AppContext, wallet: string, fresh = false): Promise<CredentialState> {
-  const addr = ctx.cfg.CREDENTIAL_ADDRESS as Address | undefined;
-  const none: CredentialState = { configured: false, address: addr ?? null, active: false, credit: 0, tokenId: 0, used: false };
-  if (!addr) return none;
+  const addrs = credentialAddresses(ctx.cfg);
+  const mintAddr = credentialMintAddress(ctx.cfg);
+  const none: CredentialState = { configured: false, address: mintAddr, active: false, credit: 0, tokenId: 0, used: false };
+  if (!addrs.length) return none;
   const key = lc(wallet);
   const hit = cache.get(key);
   if (!fresh && hit && Date.now() - hit.at < ctx.cfg.MINING_CREDIT_CACHE_SEC * 1000) return hit.v;
-  if (!(await hasCode(ctx, addr))) return none;
-  const rd = (functionName: string) =>
-    ctx.pc.readContract({ address: addr, abi: ChyAICredentialAbi, functionName, args: [checksum(wallet)] } as any) as Promise<unknown>;
-  const [active, credit, tokenId, used] = await Promise.all([rd("isActiveHolder"), rd("creditOf"), rd("credentialOf"), rd("walletUsed")]);
-  const v: CredentialState = { configured: true, address: addr, active: Boolean(active), credit: Number(credit), tokenId: Number(tokenId), used: Boolean(used) };
+  const holdings: CredentialHolding[] = [];
+  for (const addr of addrs) {
+    if (!(await hasCode(ctx, addr))) continue;
+    const rd = (functionName: string) =>
+      ctx.pc.readContract({ address: addr, abi: ChyAICredentialAbi, functionName, args: [checksum(wallet)] } as any) as Promise<unknown>;
+    const [active, credit, tokenId, used] = await Promise.all([rd("isActiveHolder"), rd("creditOf"), rd("credentialOf"), rd("walletUsed")]);
+    holdings.push({ address: addr, active: Boolean(active), credit: Number(credit), tokenId: Number(tokenId), used: Boolean(used) });
+  }
+  if (!holdings.length) return none;
+  const live = holdings.filter((h) => h.active).sort((x, y) => y.credit - x.credit)[0];
+  const v: CredentialState = {
+    configured: true,
+    address: live?.address ?? mintAddr ?? holdings[0]!.address,
+    active: !!live,
+    credit: live?.credit ?? 0,
+    tokenId: live?.tokenId ?? 0,
+    used: holdings.some((h) => h.used),
+    holdings,
+  };
   cache.set(key, { at: Date.now(), v });
   return v;
 }
+
+/** ChyAICredentialV3.mint(string label, bytes32 xHandleHash, uint256 deadline, bytes sig) */
+export const ChyAICredentialV3MintAbi = [
+  {
+    type: "function", name: "mint", stateMutability: "nonpayable",
+    inputs: [{ name: "label", type: "string" }, { name: "xHandleHash", type: "bytes32" }, { name: "deadline", type: "uint256" }, { name: "sig", type: "bytes" }],
+    outputs: [{ name: "tokenId", type: "uint256" }],
+  },
+] as const;
 
 /**
  * GET /v1/airdrop/voucher?wallet=… — for an APPROVED claim: re-checks the .ai name still resolves to the wallet, then
@@ -69,11 +122,12 @@ export async function issueCredentialVoucher(ctx: AppContext, walletIn: string) 
   if (!claim) throw new ApiError(404, "claim_not_found", "该钱包没有空投申请记录");
   if (claim.status !== "approved") throw new ApiError(403, "claim_not_approved", `申请尚未通过审核（当前状态：${claim.status}）`, { status: claim.status });
   if (!claim.agentId) throw new ApiError(409, "claim_missing_agent_id", "该申请没有填写 .ai Agent ID，请联系管理员");
-  const credential = ctx.cfg.CREDENTIAL_ADDRESS as Address | undefined;
+  const credential = credentialMintAddress(ctx.cfg) ?? undefined;
+  const version = ctx.cfg.CREDENTIAL_MINT_VERSION;
   if (!credential) throw new ApiError(503, "credential_not_deployed", "凭证合约尚未上线，请稍后再来 mint");
 
   const cred = await readCredential(ctx, wallet, true);
-  if (!cred.configured) throw new ApiError(503, "credential_not_deployed", "凭证合约尚未上线，请稍后再来 mint");
+  if (!cred.configured || !(await hasCode(ctx, credential))) throw new ApiError(503, "credential_not_deployed", "凭证合约尚未上线，请稍后再来 mint");
   if (cred.active) return { wallet: checksum(wallet), minted: true, tokenId: cred.tokenId, credential: checksum(credential), steps: [] };
   if (cred.used) throw new ApiError(409, "credential_revoked", "该钱包的凭证已被撤销，不能再次 mint");
 
@@ -91,6 +145,23 @@ export async function issueCredentialVoucher(ctx: AppContext, walletIn: string) 
   const idHash = agentIdHash(claim.agentId);
   const xHandleHash = handleHash(claim.xHandle);
   const now = await chainNow(ctx.pc);
+
+  if (version === "3") {
+    // ChyAICredentialV3 checks the .ai owner on-chain → no AgentRegistry step; the voucher binds X handle + agentId
+    const label = claim.agentId.replace(/\.ai$/, "");
+    const deadline = BigInt(now + ctx.cfg.CREDENTIAL_VOUCHER_TTL_SEC);
+    const signature = await ctx.signer.signTypedData({
+      domain: credentialDomain(ctx.cfg.CHAIN_ID, credential, "3"), types: CredentialMintTypes, primaryType: "Mint",
+      message: { to: w, xHandleHash, agentId: idHash, deadline },
+    });
+    const data = encodeFunctionData({ abi: ChyAICredentialV3MintAbi, functionName: "mint", args: [label, xHandleHash, deadline, signature] });
+    return {
+      wallet: w, minted: false, chainId: ctx.cfg.CHAIN_ID, agentId: claim.agentId, xHandle: claim.xHandle, credential: checksum(credential),
+      credentialVersion: 3, registration: null,
+      mint: { label, xHandleHash, agentId: idHash, deadline: deadline.toString(), signature },
+      steps: [{ step: "mint" as const, to: checksum(credential), data, value: "0" as const, deadline: deadline.toString() }],
+    };
+  }
   const reg = ctx.addresses.registry;
 
   // 1) AgentRegistry registration (needed when the wallet has no live entry for this agentId)
@@ -121,7 +192,7 @@ export async function issueCredentialVoucher(ctx: AppContext, walletIn: string) 
   // 2) credential mint voucher
   const deadline = BigInt(now + ctx.cfg.CREDENTIAL_VOUCHER_TTL_SEC);
   const signature = await ctx.signer.signTypedData({
-    domain: credentialDomain(ctx.cfg.CHAIN_ID, credential),
+    domain: credentialDomain(ctx.cfg.CHAIN_ID, credential, "2"),
     types: CredentialMintTypes,
     primaryType: "Mint",
     message: { to: w, xHandleHash, agentId: idHash, deadline },
@@ -136,6 +207,7 @@ export async function issueCredentialVoucher(ctx: AppContext, walletIn: string) 
     agentId: claim.agentId,
     xHandle: claim.xHandle,
     credential: checksum(credential),
+    credentialVersion: 2,
     registration,
     mint: { xHandleHash, agentId: idHash, deadline: deadline.toString(), signature },
     steps, // send in order from `wallet` (value 0); gas paid by the user

@@ -9,6 +9,7 @@
 import type { Address } from "viem";
 import type { AppContext } from "../context.js";
 import { FeeSplitterAbi } from "../chain/abi.js";
+import { credentialAddresses, credentialMintAddress } from "./credential.js";
 
 /** Binance Charity main wallet on BSC (FeeSplitter constructor default in contracts/scripts/deploy.ts). */
 export const BINANCE_CHARITY = "0x8b99f3660622e21f2910ecca7fbe51d654a1517d";
@@ -94,5 +95,6 @@ export function publicConfig(ctx: AppContext) {
       minEngagementBps: c.ELIG_MIN_ENGAGEMENT_BPS,
       requalifyIntervalDays: c.REQUALIFY_INTERVAL_DAYS,
     },
+    credential: { mintAddress: credentialMintAddress(c), mintVersion: Number(c.CREDENTIAL_MINT_VERSION), validAddresses: credentialAddresses(c) },
   };
 }
