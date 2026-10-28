@@ -40,7 +40,7 @@
     {
       "idx": 5,
       "version": "7",
-      "when": 1793193143080,
+      "when": 1793210000000,
       "tag": "0005_airdrop_autoverify",
       "breakpoints": true
     }
