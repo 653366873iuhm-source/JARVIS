@@ -53,6 +53,15 @@ export function startWorker(ctx: AppContext) {
   // free hosts sleep / redeploy: settle yesterday's reward epoch if the 00:10 UTC cron did not run (idempotent)
   if (ctx.cfg.REWARD_CATCHUP_MS > 0) stops.push(loop("reward-catchup", ctx.cfg.REWARD_CATCHUP_MS, () => rewardCatchUp(ctx), ctx));
   stops.push(loop("nft-reconcile", 6 * 3600_000, () => reconcileNftHoldings(ctx), ctx));
+  // setInterval only fires after the first interval; on a free host that redeploys often, also run both once ~2 min after boot
+  if (ctx.cfg.REWARD_CATCHUP_MS > 0 || ctx.cfg.NODE_ENV === "production") {
+    const boot = setTimeout(async () => {
+      if (ctx.cfg.REWARD_CATCHUP_MS > 0) await rewardCatchUp(ctx).catch((e) => ctx.log.error(e, "reward-catchup (boot) failed"));
+      await reconcileNftHoldings(ctx).catch((e) => ctx.log.error(e, "nft-reconcile (boot) failed"));
+    }, 120_000);
+    boot.unref?.();
+    stops.push(() => clearTimeout(boot));
+  }
   stops.push(startSignerWatch(ctx));
   const crons = [
     new Cron(ctx.cfg.REWARD_CRON, { timezone: "UTC", protect: true }, async () => {
