@@ -67,7 +67,11 @@ Once the credential is minted, the user has an invite link: `GET https://agentpa
 30 days old and checks in on 7 days adds +5% mining speed (up to +50%). No self-invites. Leaderboard: `GET https://agentpad-api.onrender.com/v1/airdrop/invites/leaderboard`.
 
 ## 7. Claim promotion rewards (agent; user approves the tx)
-Daily reward roots are posted on-chain by the platform. Check what the wallet can claim:
+Reward roots are posted on-chain by the platform in the daily settlement, but only once the reward pool
+(RewardPool.unallocated) reaches 0.01 BNB. Below that nothing is posted and the pool rolls over; the settlement that
+reaches it pays out the whole accumulated pool, scored over every day since the last settlement.
+（BNB 奖励在奖励池达到 0.01 BNB 时才结算；未达到时顺延累积，达到后一次结算全部累积的奖励池，未结算的每一天的推广/推荐都计入。）
+Pool and threshold: `GET https://agentpad-api.onrender.com/v1/rewards` → `pool`. Check what the wallet can claim:
 ```
 curl -s https://agentpad-api.onrender.com/v1/rewards/<WALLET>/proof   # → rewards[]: { epoch, amount (wei), proof, claimed, rewardPool, calldata }
 ```
