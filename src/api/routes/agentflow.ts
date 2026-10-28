@@ -108,6 +108,16 @@ Once the credential is minted, the user has an invite link: \`GET ${api}/airdrop
 (\`…/airdrop?ref=<name>.ai\`). Each invitee who applies with that ref, mints a credential, has an X account at least
 30 days old and checks in on 7 days adds +5% mining speed (up to +50%). No self-invites. Leaderboard: \`GET ${api}/airdrop/invites/leaderboard\`.
 
+## 7. Claim promotion rewards (agent; user approves the tx)
+Daily reward roots are posted on-chain by the platform. Check what the wallet can claim:
+\`\`\`
+curl -s ${api}/rewards/<WALLET>/proof   # → rewards[]: { epoch, amount (wei), proof, claimed, rewardPool, calldata }
+\`\`\`
+For each item with \`claimed:false\`, send the returned \`calldata\` to \`rewardPool\` with value 0 — never build it yourself:
+\`baw contract-call preview --binanceChainId ${chainId} --from <WALLET> --to <rewardPool> --value 0 --inputData <calldata> --json\`,
+show the preview, then \`baw contract-call execute --requestId <requestId> --json\`. The amount is paid in BNB to the wallet.
+Claim within the epoch's claim window (RewardPool.CLAIM_WINDOW; afterwards unclaimed amounts may return to the pool). Claiming costs gas — skip amounts smaller than the fee.
+
 ## One call for the current state
 \`GET ${api}/agent/flow?wallet=<WALLET>\` → \`steps[]\` (done / todo / waiting / blocked) and \`next\` with the exact command.
 

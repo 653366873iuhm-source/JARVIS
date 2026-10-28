@@ -9,7 +9,7 @@ import type { XProvider } from "./providers/x/types.js";
 import { FxTwitterProvider } from "./providers/x/fxtwitter.js";
 import { MockXProvider } from "./providers/x/mock.js";
 import { BinanceCliResolver, BinanceHttpResolver, MockAgentIdResolver, SpaceIdOnchainResolver, type AgentIdResolver } from "./providers/agentid/index.js";
-import { EtherscanFundingProvider, MockFundingProvider, RpcScanFundingProvider, type FundingSourceProvider } from "./providers/funding/index.js";
+import { ArchiveRpcFundingProvider, EtherscanFundingProvider, MockFundingProvider, RpcScanFundingProvider, type FundingSourceProvider } from "./providers/funding/index.js";
 
 export interface Logger {
   info(o: unknown, msg?: string): void;
@@ -79,6 +79,8 @@ export async function createContext(cfg: Config, o: ContextOverrides = {}): Prom
     o.funding ??
     (cfg.FUNDING_PROVIDER === "etherscan"
       ? new EtherscanFundingProvider(cfg.ETHERSCAN_API_URL, cfg.ETHERSCAN_API_KEY ?? "", cfg.CHAIN_ID)
+      : cfg.FUNDING_PROVIDER === "rpc-archive"
+        ? new ArchiveRpcFundingProvider(cfg.FUNDING_RPC_URL.split(",").map((u) => u.trim()).filter(Boolean))
       : cfg.FUNDING_PROVIDER === "rpc-scan"
         ? new RpcScanFundingProvider(pc, BigInt(cfg.START_BLOCK))
         : new MockFundingProvider());

@@ -411,6 +411,7 @@ export function handleTradeSocket(ctx: AppContext, socket: { readyState: number;
   };
   const onTrade = (raw: any) => {
     if (!tradesOn || (only && raw.project !== only)) return;
+    if (only && isHiddenProject(ctx.cfg, only)) return; // test project: no per-project pushes either
     if (!only && isHiddenActivity(ctx.cfg, raw.project, raw.trader)) return; // test data: hidden from the site-wide feed
     chain = chain.then(async () => {
       const { db, t } = ctx.database;
@@ -421,6 +422,7 @@ export function handleTradeSocket(ctx: AppContext, socket: { readyState: number;
   };
   const onProject = (data: any) => {
     if (only && data.project !== only) return;
+    if (isHiddenProject(ctx.cfg, data.project)) return;
     out("project", data);
   };
   ctx.bus.on("trade", onTrade);

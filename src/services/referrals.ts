@@ -16,6 +16,9 @@ export async function getReferralCode(ctx: AppContext, wallet: string) {
   const [a] = await db.select().from(t.agents).where(eq(t.agents.wallet, lc(wallet)));
   if (!a) throw new ApiError(404, "agent_not_found", "wallet is not a registered agent");
   const code = a.refCode ?? referralCode(ctx, wallet);
+  // agents first seen on-chain (indexer AgentRegistered) have no stored code yet: persist it, otherwise
+  // POST /v1/referrals/bind (looks codes up by agents.ref_code) rejects the code this endpoint just handed out.
+  if (!a.refCode) await db.update(t.agents).set({ refCode: code }).where(eq(t.agents.wallet, a.wallet));
   return { wallet: a.wallet, code, linkTemplate: `${ctx.cfg.PUBLIC_APP_ROUTER === "path" ? "" : "/#"}/project/{project}?ref=${code}`, urlTemplate: `${ctx.cfg.PUBLIC_APP_URL.replace(/\/+$/, "")}${ctx.cfg.PUBLIC_APP_ROUTER === "path" ? "" : "/#"}/project/{project}?ref=${code}` };
 }
 

@@ -137,7 +137,7 @@ export async function listProjects(ctx: AppContext, q: ListProjectsQuery) {
   const now = await clockNow(ctx);
   const [rows, agg, ids, txs] = await Promise.all([loadProjects(ctx), aggregates(ctx, now), agentIds(ctx), launchTxs(ctx)]);
   // test projects (HIDE_PROJECTS) are left out of public lists unless searched for by exact address
-  let items = rows.filter((p) => !isHiddenProject(ctx.cfg, p.address) || lc(q.search ?? "") === p.address).map((p) => summarize(p, agg, ids, txs, now));
+  let items = rows.filter((p) => !isHiddenProject(ctx.cfg, p.address)).map((p) => summarize(p, agg, ids, txs, now));
   if (q.search) {
     const s = q.search.toLowerCase();
     items = items.filter((p) => p.name.toLowerCase().includes(s) || p.symbol.toLowerCase().includes(s) || p.address === s || (p.launcherAgentId ?? "").includes(s));

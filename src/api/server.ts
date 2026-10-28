@@ -1,3 +1,4 @@
+import { isHiddenProject } from "../services/hidden.js";
 import { exportBackup, uploadBackup, lastBackupAt } from "../services/backup.js";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
@@ -62,6 +63,11 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
     return reply.status(500).send(fail("internal_error", String(err?.message ?? err)));
   });
   app.setNotFoundHandler((req, reply) => reply.status(404).send(fail("not_found", `${req.method} ${req.url.split("?")[0]}`)));
+  // test projects (HIDE_PROJECTS) are unavailable on every public per-project endpoint: same 404 as an unknown project
+  app.addHook("onRequest", async (req, reply) => {
+    const m = /^\/v1\/(?:projects|promotion)\/(0x[0-9a-fA-F]{40})(?:[/?]|$)/.exec(req.url);
+    if (m && isHiddenProject(ctx.cfg, m[1])) return reply.status(404).send(fail("not_found", "unknown project"));
+  });
 
   const admin = (req: FastifyRequest) => {
     const h = req.headers.authorization ?? "";
@@ -246,6 +252,14 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   app.post<{ Params: { id: string } }>("/v1/admin/txs/:id/send", async (req) => {
     admin(req);
     return sendAdminTx(ctx, req.params.id);
+  });
+  // dry-run funding-source lookup for one wallet (sybil provider check; writes nothing)
+  app.get<{ Params: { wallet: string } }>("/v1/admin/funding/:wallet", async (req) => {
+    admin(req);
+    const w = addrParam(req.params.wallet);
+    const t0 = Date.now();
+    const m = await ctx.funding.firstInboundMany([w]);
+    return { provider: ctx.funding.name ?? "custom", wallet: w, ok: m.has(w), source: m.get(w) ?? null, ms: Date.now() - t0 };
   });
   app.post<{ Params: { job: string } }>("/v1/admin/jobs/:job/run", async (req) => {
     admin(req);

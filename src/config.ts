@@ -200,7 +200,10 @@ export const ConfigSchema = z.object({
   REFERRAL_WINDOW_SEC: num(86400),
 
   // ---- sybil
-  FUNDING_PROVIDER: z.enum(["etherscan", "rpc-scan", "mock"]).default("rpc-scan"),
+  // etherscan = Etherscan v2 (BSC/chainid 56 needs a PAID plan; the free key answers "Free API access is not supported")
+  // rpc-archive = keyless binary search over a public archive RPC (FUNDING_RPC_URL, comma-separated fallbacks)
+  FUNDING_PROVIDER: z.enum(["etherscan", "rpc-archive", "rpc-scan", "mock"]).default("rpc-scan"),
+  FUNDING_RPC_URL: z.string().default("https://bsc-mainnet.public.blastapi.io"),
   ETHERSCAN_API_URL: z.string().default("https://api.etherscan.io/v2/api"),
   ETHERSCAN_API_KEY: z.string().optional(),
   SYBIL_MIN_CLUSTER: num(3),

@@ -37,9 +37,10 @@ class UnionFind {
 export async function runSybilScan(ctx: AppContext) {
   const { db, t } = ctx.database;
   const pending = await db.select().from(t.agents).where(isNull(t.agents.fundingCheckedAt));
+  const found = pending.length ? await ctx.funding.firstInboundMany(pending.map((a) => a.wallet)) : new Map();
   if (pending.length) {
-    const found = await ctx.funding.firstInboundMany(pending.map((a) => a.wallet));
     for (const a of pending) {
+      if (!found.has(a.wallet)) continue; // lookup failed: stay unchecked, retried next scan
       const f = found.get(a.wallet) ?? null;
       await db.update(t.agents).set({ funder: f?.from ?? null, fundingTx: f?.txHash ?? null, fundingCheckedAt: nowSec() }).where(eq(t.agents.wallet, a.wallet));
     }
@@ -49,7 +50,7 @@ export async function runSybilScan(ctx: AppContext) {
   const uf = new UnionFind();
   for (const a of agents) {
     uf.find(a.wallet);
-    if (a.funder && !exempt.has(a.funder)) uf.union(a.wallet, a.funder);
+    if (a.funder && a.funder !== a.wallet && !exempt.has(a.funder)) uf.union(a.wallet, a.funder);
   }
   const groups = new Map<string, string[]>();
   for (const a of agents) {
@@ -73,7 +74,7 @@ export async function runSybilScan(ctx: AppContext) {
       await db.update(t.agents).set({ sybilFlag: !!id, sybilCluster: id, updatedAt: nowSec() }).where(eq(t.agents.wallet, a.wallet));
     }
   }
-  return { checkedFunding: pending.length, clusters };
+  return { provider: ctx.funding.name ?? "custom", pending: pending.length, checkedFunding: pending.filter((a) => found.has(a.wallet)).length, failedLookups: pending.filter((a) => !found.has(a.wallet)).length, clusters };
 }
 
 export async function listClusters(ctx: AppContext) {

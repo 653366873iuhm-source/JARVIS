@@ -5,7 +5,7 @@ import path from "node:path";
 import { FxTwitterProvider, mapFxTweet } from "../../src/providers/x/fxtwitter.js";
 import { XRateLimitError } from "../../src/providers/x/types.js";
 import { BinanceCliResolver, BinanceHttpResolver, AgentIdResolveError } from "../../src/providers/agentid/index.js";
-import { EtherscanFundingProvider } from "../../src/providers/funding/index.js";
+import { ArchiveRpcFundingProvider, EtherscanFundingProvider } from "../../src/providers/funding/index.js";
 
 function fakeFetch(routes: (url: string, init?: RequestInit) => { status?: number; body: unknown; headers?: Record<string, string> }) {
   const calls: { url: string; init?: RequestInit }[] = [];
@@ -147,5 +147,52 @@ describe("Etherscan funding provider", () => {
     });
     const m = await new EtherscanFundingProvider("https://api.etherscan.io/v2/api", "k", 56, f).firstInboundMany([w]);
     expect(m.get(w)).toEqual({ from: "0xf1", txHash: "0xi", blockNumber: 90, value: "5" });
+  });
+});
+
+describe("funding lookup failures are not recorded as 'no funder'", () => {
+  it("Etherscan plan/key errors leave the wallet out of the map; 'No transactions found' is a real null", async () => {
+    const w = "0x00000000000000000000000000000000000000cd";
+    const bad = fakeFetch(() => ({ body: { status: "0", message: "NOTOK", result: "Free API access is not supported for this chain." } })).f;
+    expect((await new EtherscanFundingProvider("https://x/api", "k", 56, bad).firstInboundMany([w])).has(w)).toBe(false);
+    const empty = fakeFetch(() => ({ body: { status: "0", message: "No transactions found", result: [] } })).f;
+    const m = await new EtherscanFundingProvider("https://x/api", "k", 56, empty).firstInboundMany([w]);
+    expect(m.has(w)).toBe(true);
+    expect(m.get(w)).toBeNull();
+  });
+});
+
+describe("archive RPC funding provider (keyless)", () => {
+  const w = "0x00000000000000000000000000000000000000ce";
+  const FUND = 777; // first block with balance
+  const rpcFetch = (opts: { direct: boolean; fail?: boolean }) =>
+    (async (_url: any, init: any) => {
+      const { method, params, id } = JSON.parse(init.body);
+      const r = (result: unknown) => ({ json: async () => ({ jsonrpc: "2.0", id, result }) }) as any;
+      if (opts.fail) return { json: async () => ({ jsonrpc: "2.0", id, error: { message: "missing trie node" } }) } as any;
+      const n = (t: string) => Number(BigInt(t));
+      if (method === "eth_blockNumber") return r("0x" + (5000).toString(16));
+      if (method === "eth_getBalance") return r(n(params[1]) >= FUND ? "0x10" : "0x0");
+      if (method === "eth_getTransactionCount") return r(n(params[1]) >= 900 ? "0x1" : "0x0");
+      if (method === "eth_getBlockByNumber") {
+        expect(n(params[0])).toBe(FUND);
+        return r({ transactions: opts.direct
+          ? [{ hash: "0xa", from: "0x00000000000000000000000000000000000000f1", to: w, value: "0x10" }]
+          : [{ hash: "0xb", from: "0x00000000000000000000000000000000000000f2", to: "0x00000000000000000000000000000000000000c0", value: "0x0" }] });
+      }
+      if (method === "eth_getTransactionReceipt") return r({ logs: [{ topics: ["0xdd", "0x000000000000000000000000" + w.slice(2)], data: "0x" }] });
+      throw new Error(method);
+    }) as unknown as typeof fetch;
+  it("binary-searches the first funded block and reads the paying tx", async () => {
+    const m = await new ArchiveRpcFundingProvider(["https://rpc"], 0, rpcFetch({ direct: true })).firstInboundMany([w]);
+    expect(m.get(w)).toEqual({ from: "0x00000000000000000000000000000000000000f1", txHash: "0xa", blockNumber: FUND, value: "16" });
+  });
+  it("internal transfer: the tx whose logs name the wallet gives the funder", async () => {
+    const m = await new ArchiveRpcFundingProvider(["https://rpc"], 0, rpcFetch({ direct: false })).firstInboundMany([w]);
+    expect(m.get(w)?.from).toBe("0x00000000000000000000000000000000000000f2");
+  });
+  it("RPC errors (non-archive node) leave the wallet unchecked", async () => {
+    const m = await new ArchiveRpcFundingProvider(["https://rpc"], 0, rpcFetch({ direct: true, fail: true })).firstInboundMany([w]);
+    expect(m.has(w)).toBe(false);
   });
 });

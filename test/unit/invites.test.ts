@@ -200,6 +200,22 @@ describe("airdrop invites", () => {
     expect(loadConfig({ NODE_ENV: "test", HIDE_WALLETS: A(7) }).HIDE_WALLETS).toEqual([A(7)]);
   });
 
+  it("hidden test projects are unavailable on every public per-project endpoint (404 not_found)", async () => {
+    for (const addr of ["0xBb41b9789CF42bd2752c172170D2EFaE857F53eb", "0xe69af8599eda309621bf6bffe64f241df9786d28"]) {
+      for (const suffix of ["", "/trades", "/holders", "/candles?tf=15m", "/nfts", "/promotions", "/quote?side=buy&count=1"]) {
+        const r = await app.inject({ method: "GET", url: `/v1/projects/${addr}${suffix}` });
+        expect(r.statusCode, suffix).toBe(404);
+        expect(JSON.parse(r.body).error.code).toBe("not_found");
+      }
+      expect((await app.inject({ method: "GET", url: `/v1/promotion/${addr}` })).statusCode).toBe(404);
+      const list = await get(`/v1/projects?q=${addr}`);
+      expect(JSON.stringify(list.body).toLowerCase()).not.toContain(addr.toLowerCase());
+    }
+    // an unknown (non-hidden) address still goes through the normal handler
+    const r = await app.inject({ method: "GET", url: `/v1/projects/${A(0xabc)}` });
+    expect(r.statusCode).toBe(404);
+  });
+
   it("agent prompt and agent.md carry the invite ref; share links use hash routes", async () => {
     expect(agentPrompt("https://h", "Alice.ai")).toContain(`"ref":"alice.ai"`);
     expect(agentPrompt("https://h")).not.toContain("ref");
