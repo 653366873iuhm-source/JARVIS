@@ -20,7 +20,7 @@ export const sqliteBuilders = {
 export type Builders = typeof sqliteBuilders;
 
 export function defineSchema(b: Builders) {
-  const { table, text, int, bool, index, primaryKey } = b;
+  const { table, text, int, bool, index, uniqueIndex, primaryKey } = b;
 
   const kv = table("kv", {
     key: text("key").primaryKey(),
@@ -288,7 +288,24 @@ export function defineSchema(b: Builders) {
     updatedAt: int("updated_at").notNull(),
   });
 
+  // 发射台推特空投 (X airdrop campaign): one claim per X handle AND one per wallet; verified later by an operator.
+  const airdropClaims = table(
+    "airdrop_claims",
+    {
+      id: text("id").primaryKey(),
+      xHandle: text("x_handle").notNull(), // lowercased, without @
+      wallet: text("wallet").notNull(), // lowercase 0x address
+      amount: int("amount").notNull(), // NFT 凭证额度 (credits), not a token
+      status: text("status").notNull(), // pending_verification | approved | rejected
+      ipHash: text("ip_hash"), // HMAC of client IP (rate-limit audit; raw IP never stored)
+      createdAt: int("created_at").notNull(),
+      updatedAt: int("updated_at").notNull(),
+    },
+    (t) => [uniqueIndex("airdrop_handle_uq").on(t.xHandle), uniqueIndex("airdrop_wallet_uq").on(t.wallet), index("airdrop_created_idx").on(t.createdAt)],
+  );
+
   return {
+    airdropClaims,
     kv,
     agents,
     challenges,

@@ -12,4 +12,4 @@ const pgBuilders = {
 } as unknown as Builders; // runtime pg-core objects; TS types come from the sqlite instantiation
 
 export const schema = defineSchema(pgBuilders);
-export const { kv, agents, challenges, projects, trades, poolSwaps, nftTokens, chainEvents, xPosts, attestations, referralBindings, rewardEpochs, rewardAllocations, adminTxs } = schema;
+export const { kv, agents, challenges, projects, trades, poolSwaps, nftTokens, chainEvents, xPosts, attestations, referralBindings, rewardEpochs, rewardAllocations, adminTxs, airdropClaims } = schema;

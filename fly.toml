@@ -1,0 +1,49 @@
+# Fly.io alternative (free *.fly.dev subdomain). From backend/:
+#   fly launch --no-deploy --copy-config --name agentpad-api
+#   fly volumes create agentpad_data --region sin --size 1
+#   fly secrets set SIGNER_KEYSTORE_JSON="$(cat keystore.json)" SIGNER_KEYSTORE_PASSWORD='…' ADMIN_TOKEN=… CODE_SECRET=… \
+#       REGISTRY_ADDRESS=… FACTORY_ADDRESS=… REWARD_POOL_ADDRESS=… FEE_SPLITTER_ADDRESS=… START_BLOCK=… \
+#       PUBLIC_APP_URL=https://agentpad.vercel.app CORS_ORIGINS=https://agentpad.vercel.app
+#   fly deploy
+app = "agentpad-api"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  ROLE = "all"
+  PORT = "8080"
+  DATABASE_URL = "file:/data/agentpad.db"   # or a postgres:// URL via `fly secrets set DATABASE_URL=…`
+  CHAIN_ID = "97"
+  RPC_URL = "https://data-seed-prebsc-1-s1.bnbchain.org:8545"
+  CONFIRMATIONS = "3"
+  SIGNER_KIND = "keystore"
+  RELAYER_KIND = "same"
+  X_PROVIDER = "fxtwitter"
+  AGENTID_PROVIDER = "binance-http"
+  FUNDING_PROVIDER = "rpc-scan"
+  IPFS_GATEWAY = "https://ipfs.io/ipfs/"
+
+[mounts]
+  source = "agentpad_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"     # the indexer/worker runs in-process: keep one machine up
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    timeout = "5s"
+    method = "GET"
+    path = "/v1/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

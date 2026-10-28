@@ -1,7 +1,11 @@
 node_modules
 dist
 data
-secrets
+deployments
+*.db
+*.db-wal
+*.db-shm
+.env
+secrets/
 *.keystore.json
 *.password
-.env

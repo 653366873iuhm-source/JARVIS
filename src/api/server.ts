@@ -15,6 +15,7 @@ import { sendAdminTx } from "../services/adminTx.js";
 import { Indexer, clockNow } from "../services/indexer.js";
 import { isAddr, jsonStringify, lc } from "../lib/util.js";
 import { registerSdkRoutes } from "./routes/sdk.js";
+import { registerAirdropRoutes } from "./routes/airdrop.js";
 import { feCandles, feHolders, handleTradeSocket, registerFrontendRoutes } from "./routes/frontend.js";
 import { corsOrigin } from "./cors.js";
 import { AgentRegistryAbi, FeeSplitterAbi, LaunchFactoryAbi } from "../chain/abi.js";
@@ -227,6 +228,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
     handleTradeSocket(ctx, socket as any, req.query.project);
   });
 
+  registerAirdropRoutes(app, ctx, admin); // 发射台推特空投 campaign
   registerSdkRoutes(app, ctx); // SDK contract routes (register-request, registration-signature, quote, promotions/code, rewards proof)
   return app;
 }

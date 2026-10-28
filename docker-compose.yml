@@ -1,0 +1,64 @@
+# Local / single-host deployment: Postgres + backend (API + worker) + frontend (static, nginx).
+#   cp backend/.env.example backend/.env   # fill in contract addresses, RPC, secrets
+#   mkdir -p secrets && cp <keystore.json> secrets/signer-keystore.json && printf '%s' '<password>' > secrets/signer-password
+#   docker compose -f backend/docker-compose.yml up -d --build
+# Split API and worker: run two backend services with ROLE=api and ROLE=worker against the same DATABASE_URL.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agentpad
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentpad}
+      POSTGRES_DB: agentpad
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentpad -d agentpad"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://agentpad:${POSTGRES_PASSWORD:-agentpad}@postgres:5432/agentpad
+      ROLE: ${ROLE:-all}
+      PORT: 8080
+      SIGNER_KIND: keystore
+      SIGNER_KEYSTORE_FILE: /run/secrets/signer_keystore
+      SIGNER_KEYSTORE_PASSWORD_FILE: /run/secrets/signer_password
+    secrets:
+      - signer_keystore
+      - signer_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../frontend
+      args:
+        VITE_DATA_MODE: live
+        VITE_API_URL: ${PUBLIC_API_URL:-http://localhost:8080/v1}
+        VITE_WS_URL: ${PUBLIC_WS_URL:-ws://localhost:8080/v1/ws}
+        VITE_CHAIN_ID: ${CHAIN_ID:-97}
+        VITE_RPC_URL: ${VITE_RPC_URL:-https://data-seed-prebsc-1-s1.bnbchain.org:8545}
+        VITE_REGISTRY_ADDRESS: ${REGISTRY_ADDRESS:-}
+        VITE_FACTORY_ADDRESS: ${FACTORY_ADDRESS:-}
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+secrets:
+  signer_keystore:
+    file: ../secrets/signer-keystore.json
+  signer_password:
+    file: ../secrets/signer-password
+
+volumes:
+  pgdata:

@@ -15,6 +15,13 @@
       "when": 1793106472793,
       "tag": "0001_useful_havok",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793122038400,
+      "tag": "0002_spooky_ikaris",
+      "breakpoints": true
     }
   ]
 }

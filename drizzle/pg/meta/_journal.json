@@ -15,6 +15,13 @@
       "when": 1793106472018,
       "tag": "0001_demonic_devos",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793122037031,
+      "tag": "0002_mushy_valeria_richards",
+      "breakpoints": true
     }
   ]
 }
