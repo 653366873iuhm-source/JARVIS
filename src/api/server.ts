@@ -19,6 +19,7 @@ import { isAddr, jsonStringify, lc } from "../lib/util.js";
 import { registerSdkRoutes } from "./routes/sdk.js";
 import { registerAirdropRoutes } from "./routes/airdrop.js";
 import { registerMiningRoutes } from "./routes/mining.js";
+import { registerAgentFlowRoutes } from "./routes/agentflow.js";
 import { feCandles, feHolders, handleTradeSocket, registerFrontendRoutes } from "./routes/frontend.js";
 import { corsOrigin } from "./cors.js";
 import { AgentRegistryAbi, FeeSplitterAbi, LaunchFactoryAbi } from "../chain/abi.js";
@@ -248,6 +249,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
 
   registerAirdropRoutes(app, ctx, admin); // 发射台推特空投 campaign
   registerMiningRoutes(app, ctx); // 挖矿积分
+  registerAgentFlowRoutes(app, ctx); // one-command agent flow: /agent.md, /v1/agent/flow
   registerSdkRoutes(app, ctx); // SDK contract routes (register-request, registration-signature, quote, promotions/code, rewards proof)
   return app;
 }

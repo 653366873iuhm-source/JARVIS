@@ -119,14 +119,14 @@ describe("airdrop routes", () => {
     expect(r.statusCode).toBe(200);
     expect(JSON.parse(r.body)).toEqual({ claimed: 2, amountPerClaim: 1000 });
   });
-  it("per-IP rate limit -> 429 after 5 attempts", async () => {
+  it("per-IP rate limit -> 429 after 10 attempts", async () => {
     const codes: number[] = [];
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 11; i++) {
       const r = await app.inject({ method: "POST", url: "/v1/airdrop/claim", payload: {}, headers: { "x-forwarded-for": "10.9.9.9" } });
       codes.push(r.statusCode);
     }
-    expect(codes.slice(0, 5)).toEqual([400, 400, 400, 400, 400]);
-    expect(codes[5]).toBe(429);
+    expect(codes.slice(0, 10).every((c) => c === 400)).toBe(true);
+    expect(codes[10]).toBe(429);
   });
   it("admin export requires token; CSV default, JSON without ipHash", async () => {
     expect((await get("/v1/airdrop/claims")).statusCode).toBe(401);

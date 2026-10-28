@@ -15,7 +15,7 @@ export function clientIp(req: FastifyRequest): string {
 }
 
 export function registerAirdropRoutes(app: FastifyInstance, ctx: AppContext, admin: (req: FastifyRequest) => void) {
-  const perIp = new RateLimiter(5, 10 * 60_000); // 5 claim attempts / 10 min / IP
+  const perIp = new RateLimiter(10, 10 * 60_000); // 10 claim attempts / 10 min / IP (idempotent repeats are refunded)
   const global = new RateLimiter(120, 60_000); // 120 claim attempts / min overall
 
   app.get("/v1/airdrop/stats", async () => airdropStats(ctx));
@@ -30,6 +30,11 @@ export function registerAirdropRoutes(app: FastifyInstance, ctx: AppContext, adm
     for (const k of ["xHandle", "wallet", "repostUrl", "agentName"])
       if (typeof b[k] !== "string") throw new ApiError(400, "validation_error", "xHandle, wallet, repostUrl and agentName are required strings");
     const r = await claimAirdrop(ctx, { xHandle: b.xHandle as string, wallet: b.wallet as string, repostUrl: b.repostUrl as string, agentName: b.agentName as string }, ip);
+    if (r.existing) {
+      perIp.refund(ip); // same person re-submitting: return their claim, don't burn their attempts
+      global.refund("all");
+      return reply.status(200).send(r);
+    }
     return reply.status(201).send(r);
   });
 

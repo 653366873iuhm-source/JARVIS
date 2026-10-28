@@ -145,6 +145,7 @@ export const ConfigSchema = z.object({
   MINING_VOLUME_WINDOW_DAYS: num(7),
   MINING_CHECKIN_POINTS: num(5), // daily 签到 points
   MINING_CREDIT_CACHE_SEC: num(60), // cache of on-chain creditOf reads
+  MINING_ACTIVATE_SWEEP_MS: num(120_000), // approved claims without a mining account: start mining once the credential is minted (0 = off)
 
   // ---- promotion gate
   PROMO_POLL_MS: num(30000),

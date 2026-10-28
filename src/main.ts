@@ -4,6 +4,7 @@ import { buildServer } from "./api/server.js";
 import { startTradeTail, startWorker } from "./worker.js";
 import { startBackupTimer } from "./services/backup.js";
 import { startAirdropVerifyTimer } from "./services/airdrop.js";
+import { startMiningActivationTimer } from "./services/mining.js";
 
 async function main() {
   const cfg = loadConfig();
@@ -13,6 +14,7 @@ async function main() {
     stops.push(startWorker(ctx));
     stops.push(startBackupTimer(ctx));
     stops.push(startAirdropVerifyTimer(ctx));
+    stops.push(startMiningActivationTimer(ctx));
   }
   if (cfg.ROLE === "api" || cfg.ROLE === "all") {
     if (cfg.ROLE === "api") stops.push(startTradeTail(ctx));

@@ -26,6 +26,8 @@ import { AgentRegistryAbi, ChyAICredentialAbi } from "../../src/chain/abi.js";
 import { CredentialMintTypes, RegisterTypes, credentialDomain, registryDomain } from "../../src/chain/eip712.js";
 import { ChyAICredentialV3MintAbi, clearCredentialCache, credentialAddresses } from "../../src/services/credential.js";
 import { agentIdHash, handleHash } from "../../src/lib/util.js";
+import { activateMintedCredentials } from "../../src/services/mining.js";
+import { eq } from "drizzle-orm";
 
 const MNEMONIC = "test test test test test test test test test test test junk";
 const acct = (i: number) => mnemonicToAccount(MNEMONIC, { addressIndex: i });
@@ -156,9 +158,21 @@ describe("credential v2 + v3 side by side (CREDENTIAL_ADDRESSES)", () => {
     expect(v.status, JSON.stringify(v.body)).toBe(200);
     expect(v.body).toMatchObject({ minted: false, credentialVersion: 3, credential: v3, registration: null, mint: { label: "newbie", agentId: agentIdHash("newbie.ai"), xHandleHash: handleHash("new_user") } });
     expect(v.body.steps).toHaveLength(1);
-    expect(v.body.steps[0]).toMatchObject({ step: "mint", to: v3, value: "0" });
+    expect(v.body.steps[0]).toMatchObject({ step: "mint", to: v3, value: "0", simulation: { ok: true } });
+    expect(v.body.steps[0].baw).toBe(`baw contract-call preview --binanceChainId 31337 --from ${NEW.address} --to ${v3} --value 0 --inputData ${v.body.steps[0].data} --json`);
+    const fBefore = await inject("GET", `/v1/agent/flow?wallet=${NEW.address}`);
+    expect(fBefore.body.next).toBe("mint_credential");
+    expect(fBefore.body.steps.find((s: any) => s.id === "mint_credential").command[0].simulation.ok).toBe(true);
     await send(NEW, v.body.steps[0].to, v.body.steps[0].data);
     clearCredentialCache();
+    // mining starts by itself (background sweep), before anyone opens the mining page
+    const { db, t } = ctx.database;
+    expect((await db.select().from(t.miningAccounts).where(eq(t.miningAccounts.wallet, NEW.address.toLowerCase()))).length).toBe(0);
+    expect(await activateMintedCredentials(ctx)).toMatchObject({ activated: 1 });
+    expect((await db.select().from(t.miningAccounts).where(eq(t.miningAccounts.wallet, NEW.address.toLowerCase()))).length).toBe(1);
+    const fAfter = await inject("GET", `/v1/agent/flow?wallet=${NEW.address}`);
+    expect(fAfter.body.steps.find((s: any) => s.id === "mining").state).toBe("done");
+    expect(fAfter.body.next).toBe("daily_checkin");
     const m = await inject("GET", `/v1/mining/${NEW.address}`);
     expect(m.body.credential).toMatchObject({ active: true, credit: 1000, tokenId: 1, address: v3 });
     const st = await inject("GET", `/v1/airdrop/status?wallet=${NEW.address}`);

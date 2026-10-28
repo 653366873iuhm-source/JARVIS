@@ -6,7 +6,8 @@
  *   multiplier = 1 + min(LAUNCH_CAP, launches × LAUNCH_BOOST) + min(VOLUME_CAP, volumeBNB(window) × VOLUME_BOOST_PER_BNB)
  *   launches / volume come from the chain indexer (projects.launcher, trades.trader on ChyAI's bonding curves).
  *   + daily 签到: MINING_CHECKIN_POINTS once per wallet per UTC day, proven by a wallet signature (EIP-191 / ERC-1271).
- * Accrual is settled lazily (on read / check-in) and starts the first time the wallet is seen holding a credential.
+ * Accrual is settled lazily (on read / check-in) and starts the first time the wallet is seen holding a credential;
+ * a background sweep (MINING_ACTIVATE_SWEEP_MS) checks approved claims so mining starts within ~2 min of the mint.
  * Points are stored as integers in units of 1e-8 points ("e8"), so the site can show/tick 8 decimals exactly.
  */
 import { and, count, desc, eq, gte, sql } from "drizzle-orm";
@@ -60,6 +61,68 @@ export function checkinTypedDataJson(wallet: string, day: string, chainId: numbe
     types: { EIP712Domain: [{ name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }], ...td.types },
   });
 }
+/** Exact baw commands for today's check-in (message = eth_signTypedData_v4 request, typed data as a JSON string). */
+export function bawCheckin(wallet: string, day: string, chainId: number) {
+  const message = JSON.stringify({ method: "eth_signTypedData_v4", params: [checksum(wallet), checkinTypedDataJson(wallet, day, chainId)] });
+  const q = `'${message.replace(/'/g, "'\\''")}'`;
+  return {
+    message,
+    preview: `baw sign-message preview --binanceChainId ${chainId} --signType EIP712 --message ${q} --json`,
+    execute: "baw sign-message execute --requestId <requestId> --json",
+    result: "baw sign-message result --order-id <orderId> --json",
+    submit: {
+      method: "POST", path: "/v1/mining/checkin",
+      body: { wallet: checksum(wallet), signType: "eip712", signature: "<data.signature>", signatureRecovery: "<data.signatureRecovery>" },
+    },
+  };
+}
+
+/**
+ * Mining auto-start: approved airdrop claims whose wallet has no mining account yet are re-read on-chain (fresh, v2 + v3);
+ * a wallet that now holds a credential gets its account opened (accrual starts) without anyone opening the site.
+ */
+export async function activateMintedCredentials(ctx: AppContext, limit = 200) {
+  const { db, t } = ctx.database;
+  const rows = await db
+    .select({ wallet: t.airdropClaims.wallet, acct: t.miningAccounts.wallet })
+    .from(t.airdropClaims)
+    .leftJoin(t.miningAccounts, eq(t.miningAccounts.wallet, t.airdropClaims.wallet))
+    .where(eq(t.airdropClaims.status, "approved"))
+    .limit(5000);
+  const todo = rows.filter((r) => !r.acct).slice(0, limit);
+  let activated = 0;
+  for (const r of todo) {
+    try {
+      const cred = await readCredential(ctx, r.wallet, true);
+      if (!cred.active) continue;
+      const { account } = await settle(ctx, r.wallet, nowSec());
+      if (account) activated++;
+    } catch (e) {
+      ctx.log.warn({ wallet: r.wallet, err: String(e) }, "mining activation check failed");
+    }
+  }
+  if (activated) ctx.log.info({ activated, checked: todo.length }, "mining auto-start");
+  return { checked: todo.length, activated };
+}
+
+export function startMiningActivationTimer(ctx: AppContext) {
+  if (!ctx.cfg.MINING_ACTIVATE_SWEEP_MS) return () => undefined;
+  let running = false;
+  const timer = setInterval(async () => {
+    if (running) return;
+    running = true;
+    try {
+      await activateMintedCredentials(ctx);
+    } catch (e) {
+      ctx.log.error(e, "mining activation sweep failed");
+    } finally {
+      running = false;
+    }
+  }, ctx.cfg.MINING_ACTIVATE_SWEEP_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 /** Accepts 0x-less hex and baw's split form (64-byte r‖s + signatureRecovery 00/01/1b/1c). */
 export function normalizeSignature(sig: string, recovery?: string): string {
   let h = String(sig ?? "").trim();
@@ -173,7 +236,14 @@ export async function getMining(ctx: AppContext, walletIn: string) {
       nextCheckinAt: ci ? nextUtcMidnight(now) : now,
       message: checkinMessage(wallet, today, ctx.cfg.CHAIN_ID),
       typedData: checkinTypedDataJson(wallet, today, ctx.cfg.CHAIN_ID), // EIP-712 alternative (signType: "eip712")
+      baw: bawCheckin(wallet, today, ctx.cfg.CHAIN_ID),
     },
+    status: cred.active ? (ci ? "mining_checked_in" : "mining_checkin_available") : "no_credential",
+    next: cred.active
+      ? ci
+        ? "挖矿中，今天已签到"
+        : "挖矿中：今天还可以签到（baw sign-message EIP-712）"
+      : "未 mint 凭证 → 不挖矿。下一步：用 Agent 钱包（baw）发送 /v1/airdrop/voucher 返回的 mint 交易",
     asOf: now,
   };
 }

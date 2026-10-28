@@ -101,6 +101,25 @@ export async function readCredential(ctx: AppContext, wallet: string, fresh = fa
   return v;
 }
 
+/** The .ai Agent ID lives in the Binance Agentic Wallet, so the mint must be sent from that wallet (baw), not a browser wallet. */
+export const SEND_WITH =
+  "Binance Agentic Wallet (baw CLI): run `baw wallet settings --json` (devMode.enabled must be true), then the `baw` preview command of each step, show the preview to the user, then `baw contract-call execute --requestId <requestId> --json` (approve in the Binance App if requireConfirmation=true).";
+
+/** Exact `baw contract-call preview` command for one step (flags per the official skill: --from, --inputData, --value in wei). */
+export function bawContractCall(chainId: number, from: string, to: string, data: string, value = "0") {
+  return `baw contract-call preview --binanceChainId ${chainId} --from ${from} --to ${to} --value ${value} --inputData ${data} --json`;
+}
+
+/** eth_call of the exact calldata from the wallet (latest block): proves the mint would succeed before the user signs. */
+async function simulateFrom(ctx: AppContext, from: Address, to: Address, data: Hex): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await ctx.pc.call({ account: from, to, data });
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.shortMessage ?? e?.message ?? e).slice(0, 300) };
+  }
+}
+
 /** ChyAICredentialV3.mint(string label, bytes32 xHandleHash, uint256 deadline, bytes sig) */
 export const ChyAICredentialV3MintAbi = [
   {
@@ -155,11 +174,13 @@ export async function issueCredentialVoucher(ctx: AppContext, walletIn: string) 
       message: { to: w, xHandleHash, agentId: idHash, deadline },
     });
     const data = encodeFunctionData({ abi: ChyAICredentialV3MintAbi, functionName: "mint", args: [label, xHandleHash, deadline, signature] });
+    const step = { step: "mint" as const, to: checksum(credential), data, value: "0" as const, deadline: deadline.toString() };
     return {
       wallet: w, minted: false, chainId: ctx.cfg.CHAIN_ID, agentId: claim.agentId, xHandle: claim.xHandle, credential: checksum(credential),
       credentialVersion: 3, registration: null,
       mint: { label, xHandleHash, agentId: idHash, deadline: deadline.toString(), signature },
-      steps: [{ step: "mint" as const, to: checksum(credential), data, value: "0" as const, deadline: deadline.toString() }],
+      steps: [{ ...step, baw: bawContractCall(ctx.cfg.CHAIN_ID, w, step.to, data), simulation: await simulateFrom(ctx, w, step.to, data) }],
+      sendWith: SEND_WITH,
     };
   }
   const reg = ctx.addresses.registry;
@@ -210,6 +231,8 @@ export async function issueCredentialVoucher(ctx: AppContext, walletIn: string) 
     credentialVersion: 2,
     registration,
     mint: { xHandleHash, agentId: idHash, deadline: deadline.toString(), signature },
-    steps, // send in order from `wallet` (value 0); gas paid by the user
+    // send in order from `wallet` (value 0); gas paid by the user
+    steps: steps.map((st) => ({ ...st, baw: bawContractCall(ctx.cfg.CHAIN_ID, w, st.to, st.data) })),
+    sendWith: SEND_WITH,
   };
 }

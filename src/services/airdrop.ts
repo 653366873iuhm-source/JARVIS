@@ -66,6 +66,11 @@ export class RateLimiter {
     if (this.hits.size > 50_000) for (const [k, v] of this.hits) if (!v.some((t) => now - t < this.windowMs)) this.hits.delete(k);
     return true;
   }
+  /** Gives one hit back (an idempotent repeat submission should not eat the user's attempts). */
+  refund(key: string) {
+    const arr = this.hits.get(key);
+    if (arr?.length) arr.pop();
+  }
 }
 
 const ipHash = (ctx: AppContext, ip: string) => crypto.createHmac("sha256", ctx.cfg.CODE_SECRET).update(`airdrop-ip:${ip}`).digest("hex").slice(0, 24);
@@ -189,26 +194,28 @@ export async function claimAirdrop(ctx: AppContext, body: ClaimInput, ip = "") {
   const agentId = normalizeAgentName(body.agentName);
   const repostUrl = normalizeRepostUrl(body.repostUrl, xHandle);
   const { db, t } = ctx.database;
-  const dupe = async () => {
-    const rows = await db
+  const findRows = () =>
+    db
       .select()
       .from(t.airdropClaims)
       .where(or(eq(t.airdropClaims.xHandle, xHandle), eq(t.airdropClaims.wallet, wallet), eq(t.airdropClaims.agentId, agentId)));
+  const dupe = (rows: Awaited<ReturnType<typeof findRows>>) => {
+    // the same person submitting again (same wallet + X handle + .ai) is idempotent: return / re-check their claim
+    const mine = rows.find((r) => r.wallet === wallet && r.xHandle === xHandle && r.agentId === agentId);
+    if (mine) return mine;
+    const byWallet = rows.find((r) => r.wallet === wallet);
     if (rows.some((r) => r.xHandle === xHandle)) throw new ApiError(409, "handle_already_claimed", "该推特账号已经领取过（一个推特号只能领一份）");
-    if (rows.some((r) => r.wallet === wallet)) throw new ApiError(409, "wallet_already_claimed", "该钱包已经领取过（同一钱包只能领一份）");
+    if (byWallet)
+      throw new ApiError(409, "wallet_already_claimed", `该钱包已经提交过申请（@${byWallet.xHandle} / ${byWallet.agentId ?? "-"}），请用同样的信息查询或继续 mint`, {
+        status: byWallet.status,
+      });
     if (rows.some((r) => r.agentId === agentId)) throw new ApiError(409, "agent_id_already_claimed", "该 .ai Agent ID 已经领取过");
+    return null;
   };
-  await dupe();
+  const existing = dupe(await findRows());
+  if (existing) return resubmitClaim(ctx, existing, repostUrl);
   // the .ai name must resolve (on-chain Agent ID registry) to exactly the submitted wallet
-  let resolved;
-  try {
-    resolved = await ctx.resolver.resolve(agentId);
-  } catch (e: any) {
-    throw new ApiError(503, "agent_id_unavailable", `暂时无法查询 Agent ID，请稍后再试（${e?.message ?? e}）`);
-  }
-  if (!resolved) throw new ApiError(422, "agent_id_unresolved", `${agentId} 不存在或未绑定 BSC 地址（仅限持有 Binance Agent ID 的钱包）`);
-  if (resolved.isFallback || !isAddressEqual(resolved.address, checksum(wallet)))
-    throw new ApiError(422, "agent_id_mismatch", `${agentId} 属于 ${resolved.address}，不是你填写的钱包`);
+  await assertAgentIdOwner(ctx, agentId, wallet);
   // auto-verify the submitted post against the pinned post (quote / reply by the same handle)
   const v = await verifyRepostPost(ctx, parseTweetId(repostUrl)!, xHandle);
   if (v.verdict === "reject") throw new ApiError(422, `repost_${v.reason}`, v.message);
@@ -221,13 +228,56 @@ export async function claimAirdrop(ctx: AppContext, body: ClaimInput, ip = "") {
   try {
     await db.insert(t.airdropClaims).values(row);
   } catch (e) {
-    await dupe(); // concurrent duplicate hit the unique index → report it as the matching 409
+    // concurrent duplicate (double click / two tabs) hit the unique index → same person: return their claim
+    const again = dupe(await findRows());
+    if (again) return resubmitClaim(ctx, again, repostUrl);
     throw e;
   }
   const { claimed } = await airdropStats(ctx);
   return {
     id: row.id, xHandle, wallet, agentId, repostUrl, amount: AIRDROP_AMOUNT, status: row.status as AirdropStatus, reason: row.reviewReason,
-    message: reviewMessage(row.status, row.reviewReason), createdAt: now, claimed,
+    message: reviewMessage(row.status, row.reviewReason), createdAt: now, claimed, existing: false, next: nextStep(row.status),
+  };
+}
+
+const nextStep = (status: string) => (status === "approved" ? "mint" : status === "rejected" ? "resubmit" : "wait");
+
+async function assertAgentIdOwner(ctx: AppContext, agentId: string, wallet: string) {
+  let resolved;
+  try {
+    resolved = await ctx.resolver.resolve(agentId);
+  } catch (e: any) {
+    throw new ApiError(503, "agent_id_unavailable", `暂时无法查询 Agent ID，请稍后再试（${e?.message ?? e}）`);
+  }
+  if (!resolved) throw new ApiError(422, "agent_id_unresolved", `${agentId} 不存在或未绑定 BSC 地址（仅限持有 Binance Agent ID 的钱包）`);
+  if (resolved.isFallback || !isAddressEqual(resolved.address, checksum(wallet)))
+    throw new ApiError(422, "agent_id_mismatch", `${agentId} 属于 ${resolved.address}，不是你填写的钱包`);
+}
+
+type ClaimRow = typeof import("../db/schema.sqlite.js").airdropClaims.$inferSelect;
+
+/**
+ * Repeat submission by the same wallet + X handle + .ai (idempotent, HTTP 200):
+ *  - approved → returned as is (next step: mint)
+ *  - pending / rejected → the (possibly new) post link is re-verified now; approve → approved, still undecided →
+ *    stays pending (sweep retries), clearly not referencing the pinned post → 422 with the reason (row unchanged).
+ */
+export async function resubmitClaim(ctx: AppContext, r: ClaimRow, repostUrl: string) {
+  const { db, t } = ctx.database;
+  let row = r;
+  if (r.status !== "approved") {
+    const v = await verifyRepostPost(ctx, parseTweetId(repostUrl)!, r.xHandle);
+    if (v.verdict === "reject") throw new ApiError(422, `repost_${v.reason}`, v.message, { status: r.status, existing: true });
+    const status = v.verdict === "approve" ? "approved" : "pending_verification";
+    const set = { status, repostUrl, reviewReason: v.reason, verifyAttempts: v.reason === "auto_approve_off" ? 0 : 1, updatedAt: nowSec() };
+    await db.update(t.airdropClaims).set(set).where(eq(t.airdropClaims.id, r.id));
+    row = { ...r, ...set };
+  }
+  const { claimed } = await airdropStats(ctx);
+  return {
+    id: row.id, xHandle: row.xHandle, wallet: row.wallet, agentId: row.agentId, repostUrl: row.repostUrl, amount: row.amount,
+    status: row.status as AirdropStatus, reason: row.reviewReason ?? null, message: reviewMessage(row.status, row.reviewReason),
+    createdAt: row.createdAt, claimed, existing: true, next: nextStep(row.status),
   };
 }
 
