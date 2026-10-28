@@ -13,6 +13,7 @@ import { rewardsFor, runRewardEpoch, epochOf } from "../services/rewards.js";
 import { listClusters, removeAgent, revokeLaunch, runSybilScan } from "../services/sybil.js";
 import { requalifyAgents } from "../services/requalify.js";
 import { sendAdminTx } from "../services/adminTx.js";
+import { adminLaunchVoucher } from "../services/launchVoucher.js";
 import { Indexer, clockNow } from "../services/indexer.js";
 import { isAddr, jsonStringify, lc } from "../lib/util.js";
 import { registerSdkRoutes } from "./routes/sdk.js";
@@ -200,6 +201,12 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
     admin(req);
     const b = parse(z.object({ reason: z.string().default("admin") }), req.body ?? {});
     return revokeLaunch(ctx, addrParam(req.params.wallet), b.reason);
+  });
+  // INTERNAL TESTING ONLY (smoke test): signed register(...) with canLaunch=true for an already-registered wallet. Not broadcast.
+  app.post<{ Params: { wallet: string } }>("/v1/admin/agents/:wallet/launch-voucher", async (req) => {
+    admin(req);
+    const b = parse(z.object({ agentId: z.string().min(4), expiryHours: z.number().int().optional(), deadlineMin: z.number().int().optional() }), req.body ?? {});
+    return adminLaunchVoucher(ctx, addrParam(req.params.wallet), b.agentId, { expiryHours: b.expiryHours, deadlineMin: b.deadlineMin });
   });
   app.get("/v1/admin/txs", async (req) => {
     admin(req);
