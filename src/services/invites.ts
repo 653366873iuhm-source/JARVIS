@@ -234,5 +234,35 @@ export async function inviteLeaderboard(ctx: AppContext, limit = 50) {
   return { asOf: now, items: rows.slice(0, Math.max(1, Math.min(200, limit))).map((r, i) => ({ rank: i + 1, ...r })) };
 }
 
+/** Start of the current invite week: Monday 00:00 Asia/Shanghai (UTC+8, no DST), as unix seconds. */
+export function inviteWeekStart(now = nowSec()) {
+  const OFF = 8 * 3600;
+  const day = Math.floor((now + OFF) / DAY); // days since 1970-01-01 (a Thursday) on the UTC+8 clock
+  const dow = (day + 3) % 7; // 0 = Monday
+  return (day - dow) * DAY - OFF;
+}
+
+/** GET /v1/airdrop/invites/leaderboard?period=week — inviters ranked by invitees bound since Monday 00:00 UTC+8
+ *  (qualified first, then bound), top 10 by default. Display only: no boost/reward fields. */
+export async function weeklyInviteLeaderboard(ctx: AppContext, limit = 10, now = nowSec()) {
+  const since = inviteWeekStart(now);
+  const recent = (await allBindings(ctx)).filter(
+    (b) => b.boundAt >= since && !isHiddenWallet(ctx.cfg, b.inviter) && !isHiddenWallet(ctx.cfg, b.invitee),
+  );
+  const inviters = [...new Set(recent.map((b) => b.inviter))];
+  const { db, t } = ctx.database;
+  const names = inviters.length
+    ? new Map((await db.select({ w: t.airdropClaims.wallet, a: t.airdropClaims.agentId }).from(t.airdropClaims).where(inArray(t.airdropClaims.wallet, inviters))).map((r) => [r.w, r.a] as const))
+    : new Map<string, string | null>();
+  const rows = [];
+  for (const w of inviters) {
+    const p = (await inviteProgress(ctx, w, now, 0)).filter((x) => x.boundAt >= since && !isHiddenWallet(ctx.cfg, x.wallet));
+    if (!p.length) continue;
+    rows.push({ wallet: checksum(w), agentId: names.get(w) ?? null, invited: p.length, qualified: p.filter((x) => x.qualified).length });
+  }
+  rows.sort((a, b) => b.qualified - a.qualified || b.invited - a.invited || (a.wallet < b.wallet ? -1 : 1));
+  return { asOf: now, period: "week" as const, since, items: rows.slice(0, Math.max(1, Math.min(50, limit))).map((r, i) => ({ rank: i + 1, ...r })) };
+}
+
 /** Admin/test helper: the binding of an invitee, if any. */
 export const inviteOf = (ctx: AppContext, invitee: string) => kvGet(ctx, byKey(invitee));

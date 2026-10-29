@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../../context.js";
 import { ApiError } from "../../services/registration.js";
 import { issueCredentialVoucher } from "../../services/credential.js";
-import { getInvites, inviteLeaderboard } from "../../services/invites.js";
+import { getInvites, inviteLeaderboard, weeklyInviteLeaderboard } from "../../services/invites.js";
 import { adminTestApprove, airdropVerifySweep, resolveAgentName } from "../../services/airdrop.js";
 import { AIRDROP_STATUSES, RateLimiter, airdropClaimsCsv, airdropStats, airdropStatus, claimAirdrop, listAirdropClaims, setAirdropStatus, type AirdropStatus } from "../../services/airdrop.js";
 
@@ -50,7 +50,10 @@ export function registerAirdropRoutes(app: FastifyInstance, ctx: AppContext, adm
   });
 
   // public: invites — leaderboard + "my invites" (link, invitees, mining boost)
-  app.get<{ Querystring: { limit?: string } }>("/v1/airdrop/invites/leaderboard", async (req) => inviteLeaderboard(ctx, Number(req.query.limit ?? 50) || 50));
+  app.get<{ Querystring: { limit?: string; period?: string } }>("/v1/airdrop/invites/leaderboard", async (req) =>
+    req.query.period === "week"
+      ? weeklyInviteLeaderboard(ctx, Number(req.query.limit ?? 10) || 10)
+      : inviteLeaderboard(ctx, Number(req.query.limit ?? 50) || 50));
   app.get<{ Params: { wallet: string } }>("/v1/airdrop/invites/:wallet", async (req) => getInvites(ctx, req.params.wallet));
 
   // public: claim status of a wallet (+ on-chain credential state)

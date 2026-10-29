@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import type { FastifyInstance } from "fastify";
+import { eq } from "drizzle-orm";
 
 const active = new Set<string>();
 vi.mock("../../src/services/credential.js", async (orig) => {
@@ -27,7 +28,7 @@ import type { AppContext } from "../../src/context.js";
 import { MockAgentIdResolver } from "../../src/providers/agentid/index.js";
 import { MockXProvider } from "../../src/providers/x/mock.js";
 import { agentMarkdown, agentPrompt } from "../../src/api/routes/agentflow.js";
-import { inviteBoostOf, normalizeRef } from "../../src/services/invites.js";
+import { inviteBoostOf, inviteWeekStart, normalizeRef } from "../../src/services/invites.js";
 import { computeRate } from "../../src/services/mining.js";
 import { projectLink } from "../../src/api/routes/sdk.js";
 import { isHiddenActivity, isHiddenProject, isHiddenWallet } from "../../src/services/hidden.js";
@@ -198,6 +199,42 @@ describe("airdrop invites", () => {
     expect(isHiddenProject(ctx.cfg, "0xBb41b9789CF42bd2752c172170D2EFaE857F53eb")).toBe(true);
     expect(isHiddenActivity(ctx.cfg, A(1), A(2))).toBe(false);
     expect(loadConfig({ NODE_ENV: "test", HIDE_WALLETS: A(7) }).HIDE_WALLETS).toEqual([A(7)]);
+  });
+
+  it("weekly invite leaderboard (?period=week) counts only invitees bound since Monday 00:00 UTC+8; default unchanged", async () => {
+    // week start: Monday 00:00 Asia/Shanghai
+    const wed = Date.UTC(2026, 9, 28, 12, 0, 0) / 1000; // Wed 2026-10-28 20:00 UTC+8
+    expect(inviteWeekStart(wed)).toBe(Date.UTC(2026, 9, 25, 16, 0, 0) / 1000); // Mon 2026-10-26 00:00 UTC+8
+    const sunLate = Date.UTC(2026, 10, 1, 15, 59, 0) / 1000; // Sun 2026-11-01 23:59 UTC+8
+    expect(inviteWeekStart(sunLate)).toBe(Date.UTC(2026, 9, 25, 16, 0, 0) / 1000);
+    const monZero = Date.UTC(2026, 10, 1, 16, 0, 0) / 1000; // Mon 2026-11-02 00:00 UTC+8
+    expect(inviteWeekStart(monZero)).toBe(monZero);
+
+    const all1 = await get(`/v1/airdrop/invites/leaderboard`);
+    const top = all1.body.items[0];
+    const wk = await get(`/v1/airdrop/invites/leaderboard?period=week`);
+    expect(wk.status).toBe(200);
+    expect(wk.body).toMatchObject({ period: "week", since: inviteWeekStart(wk.body.asOf) });
+    expect(wk.body.items.length).toBeLessThanOrEqual(10);
+    expect(wk.body.items[0]).toMatchObject({ rank: 1, wallet: top.wallet, qualified: 2, invited: 3 });
+    expect(wk.body.items.some((r: any) => r.wallet.toLowerCase() === HIDDEN)).toBe(false);
+    expect(wk.body.items[0].boost).toBeUndefined();
+
+    // move that inviter's bindings to before this week: gone from the weekly board, still on the all-time board
+    const { db, t } = ctx.database;
+    const rows = await db.select().from(t.kv);
+    for (const r of rows) {
+      if (!r.key.startsWith("invite:")) continue;
+      const b = JSON.parse(r.value);
+      if (b.inviter !== top.wallet.toLowerCase()) continue;
+      b.boundAt = wk.body.since - 60;
+      await db.update(t.kv).set({ value: JSON.stringify(b) }).where(eq(t.kv.key, r.key));
+    }
+    const wk2 = await get(`/v1/airdrop/invites/leaderboard?period=week`);
+    expect(wk2.body.items.some((r: any) => r.wallet === top.wallet)).toBe(false);
+    const all2 = await get(`/v1/airdrop/invites/leaderboard`);
+    expect(all2.body.items[0]).toMatchObject({ wallet: top.wallet, qualified: 2, invited: 3 });
+    expect(all2.body.period).toBeUndefined();
   });
 
   it("hidden test projects are unavailable on every public per-project endpoint (404 not_found)", async () => {
