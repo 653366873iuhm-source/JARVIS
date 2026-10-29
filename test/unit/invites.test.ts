@@ -146,7 +146,7 @@ describe("airdrop invites", () => {
     expect((await get(`/v1/airdrop/invites/${a.wallet}`)).body.invitedBy.toLowerCase()).toBe(inviter.wallet);
   });
 
-  it("qualifies invitees only after mint + 7 check-in days + X ≥ 30 days; boosts the inviter's mining; caps invitees", async () => {
+  it("qualifies invitees as soon as they mint (no check-in days / X age needed); boosts the inviter's mining; caps invitees", async () => {
     const inviter = person();
     await claim(inviter.body);
     await mintAndCheckin(inviter.wallet, 0);
@@ -158,24 +158,24 @@ describe("airdrop invites", () => {
     const over = person();
     expect((await claim({ ...over.body, ref: inviter.agentName })).body.invite).toMatchObject({ bound: false, reason: "invite_cap_reached" });
     await mintAndCheckin(good.wallet, 7);
-    await mintAndCheckin(young.wallet, 7); // X account too young
-    await mintAndCheckin(lazy.wallet, 6); // only 6 check-in days
+    await mintAndCheckin(young.wallet, 1); // young X account still counts
+    // lazy never mints -> not qualified
     const mine = await get(`/v1/airdrop/invites/${inviter.wallet}`);
-    expect(mine.body).toMatchObject({ invited: 3, qualified: 1 });
-    expect(mine.body.boost).toBeCloseTo(0.05);
+    expect(mine.body).toMatchObject({ invited: 3, qualified: 2 });
+    expect(mine.body.boost).toBeCloseTo(0.1);
     const byWallet = Object.fromEntries(mine.body.invitees.map((i: any) => [i.wallet.toLowerCase(), i]));
     expect(byWallet[good.wallet]).toMatchObject({ minted: true, checkinDays: 7, xAgeOk: true, qualified: true });
-    expect(byWallet[young.wallet]).toMatchObject({ xAgeOk: false, qualified: false });
-    expect(byWallet[lazy.wallet]).toMatchObject({ checkinDays: 6, qualified: false });
+    expect(byWallet[young.wallet]).toMatchObject({ xAgeOk: true, qualified: true });
+    expect(byWallet[lazy.wallet]).toMatchObject({ minted: false, qualified: false });
     const m = await get(`/v1/mining/${inviter.wallet}`);
-    expect(m.body.boosts).toMatchObject({ invited: 3, qualifiedInvites: 1 });
-    expect(m.body.boosts.inviteBoost).toBeCloseTo(0.05);
-    expect(m.body.multiplier).toBeCloseTo(1.05);
-    expect(m.body.ratePerDay).toBeCloseTo(10.5);
-    // leaderboard: this inviter (1 qualified) ranks first
+    expect(m.body.boosts).toMatchObject({ invited: 3, qualifiedInvites: 2 });
+    expect(m.body.boosts.inviteBoost).toBeCloseTo(0.1);
+    expect(m.body.multiplier).toBeCloseTo(1.1);
+    expect(m.body.ratePerDay).toBeCloseTo(11);
+    // leaderboard: this inviter (2 qualified) ranks first
     const lb = await get(`/v1/airdrop/invites/leaderboard`);
     expect(lb.status).toBe(200);
-    expect(lb.body.items[0]).toMatchObject({ rank: 1, wallet: expect.any(String), agentId: inviter.agentName, qualified: 1, invited: 3 });
+    expect(lb.body.items[0]).toMatchObject({ rank: 1, wallet: expect.any(String), agentId: inviter.agentName, qualified: 2, invited: 3 });
   });
 
   it("hide list (config) drops test wallets from the invite and mining leaderboards and live activity", async () => {

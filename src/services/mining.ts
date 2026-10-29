@@ -188,7 +188,7 @@ export async function walletActivity(ctx: AppContext, wallet: string, now = nowS
 export function computeRate(cfg: AppContext["cfg"], credit: number, act: Activity, qualifiedInvites = 0, earlyBird = false) {
   const launchBoost = Math.min(cfg.MINING_LAUNCH_BOOST_CAP, act.launches * cfg.MINING_LAUNCH_BOOST);
   const volumeBoost = Math.min(cfg.MINING_VOLUME_BOOST_CAP, act.volumeBnb * cfg.MINING_VOLUME_BOOST_PER_BNB);
-  // +5% per qualified invitee (minted credential, unique .ai, X ≥ 30 days, 7 check-in days), capped at +50%
+  // +5% per qualified invitee (applied via the link + minted credential, unique .ai), capped at +50%
   const inviteBoost = inviteBoostOf(cfg, qualifiedInvites);
   // 早鸟: first EARLYBIRD_SLOTS real minters, +EARLYBIRD_BOOST for EARLYBIRD_DAYS after the mint
   const earlyBirdBoost = earlyBird && credit > 0 ? cfg.EARLYBIRD_BOOST : 0;

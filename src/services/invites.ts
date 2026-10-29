@@ -5,8 +5,8 @@
  *  - The invitee's airdrop claim carries `ref`; the binding is made once, when they apply (first touch, immutable).
  *  - The inviter's mining speed gets +INVITE_BOOST_PER_INVITEE (5%) for every QUALIFIED invitee, capped at
  *    INVITE_BOOST_CAP (+50%). Qualified = the invitee minted a credential (mining account with credit > 0),
- *    has a unique .ai (one claim per .ai is enforced by the claims table), an X account at least
- *    INVITE_MIN_X_AGE_DAYS (30) days old and daily check-ins on INVITE_MIN_CHECKIN_DAYS (7) distinct UTC days.
+ *    has a unique .ai (one claim per .ai is enforced by the claims table). Optional extra gates (both 0 = off by
+ *    default since 2026-10-29): X account age ≥ INVITE_MIN_X_AGE_DAYS and check-ins on ≥ INVITE_MIN_CHECKIN_DAYS days.
  *  - No self-invites (same wallet / X handle / .ai), at most INVITE_MAX_PER_INVITER invitees per inviter, and the
  *    inviter must hold an active credential at bind time.
  *
@@ -166,7 +166,7 @@ export async function inviteProgress(ctx: AppContext, inviter: string, now = now
     const xAgeOk = b.xCreatedAt == null ? null : now - b.xCreatedAt >= ctx.cfg.INVITE_MIN_X_AGE_DAYS * DAY;
     out.push({
       wallet: checksum(b.invitee), agentId: b.inviteeAgentId ?? null, boundAt: b.boundAt, minted, checkinDays, xAgeOk,
-      qualified: minted && !!b.inviteeAgentId && xAgeOk === true && checkinDays >= ctx.cfg.INVITE_MIN_CHECKIN_DAYS,
+      qualified: minted && !!b.inviteeAgentId && (ctx.cfg.INVITE_MIN_X_AGE_DAYS <= 0 || xAgeOk === true) && checkinDays >= ctx.cfg.INVITE_MIN_CHECKIN_DAYS,
     });
   }
   return out.sort((a, b) => b.boundAt - a.boundAt);

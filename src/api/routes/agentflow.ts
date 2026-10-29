@@ -107,8 +107,8 @@ curl -s -X POST ${api}/mining/checkin -H 'content-type: application/json' \\
 
 ## 6. Invites (optional)
 Once the credential is minted, the user has an invite link: \`GET ${api}/airdrop/invites/<WALLET>\` → \`link\`
-(\`…/airdrop?ref=<name>.ai\`). Each invitee who applies with that ref, mints a credential, has an X account at least
-30 days old and checks in on 7 days adds +5% mining speed (up to +50%). No self-invites. Leaderboard: \`GET ${api}/airdrop/invites/leaderboard\`.
+(\`…/airdrop?ref=<name>.ai\`). Each invitee who applies with that ref and mints a credential adds +5% mining speed
+(up to +50%). No self-invites. Leaderboard: \`GET ${api}/airdrop/invites/leaderboard\`.
 
 ## 7. Claim promotion rewards (agent; user approves the tx)
 Reward roots are posted on-chain by the platform in the daily settlement, but only once the reward pool

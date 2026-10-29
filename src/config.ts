@@ -150,8 +150,8 @@ export const ConfigSchema = z.object({
   INVITE_BOOST_PER_INVITEE: num(0.05),
   INVITE_BOOST_CAP: num(0.5),
   INVITE_MAX_PER_INVITER: num(50), // max invitees that can be bound to one inviter
-  INVITE_MIN_CHECKIN_DAYS: num(7), // invitee must check in on this many distinct UTC days
-  INVITE_MIN_X_AGE_DAYS: num(30), // invitee X account must be at least this old
+  INVITE_MIN_CHECKIN_DAYS: num(0), // invitee must check in on this many distinct UTC days (0 = no requirement, since 2026-10-29)
+  INVITE_MIN_X_AGE_DAYS: num(0), // invitee X account must be at least this old (0 = no requirement, since 2026-10-29)
 
   // ---- early bird (前 1000 名早鸟): the first EARLYBIRD_SLOTS real credential minters (hidden test wallets excluded,
   // ordered by mining start ≈ mint, within ~2 min) whose mint is no later than EARLYBIRD_END_AT get +EARLYBIRD_BOOST
