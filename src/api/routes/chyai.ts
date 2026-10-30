@@ -201,8 +201,8 @@ Agent ID per stage**. Each payment: 20% to the treasury ${TREASURY}, 80% held in
 share opens the PancakeSwap CHYAI/USDT pool automatically (>= 0.00048 USDT per CHYAI), burns the LP, enables trading and
 ends all admin rights. From 30 days after the start (\`valveOpensAt\`), while the pool has not opened, the treasury may
 withdraw everything the contract holds, repeatedly; the sale keeps running and a later sell-out still opens the pool with
-the USDT held since the last withdrawal. There are no buyer refunds. Nobody can pause the sale after it starts. The start
-time is announced by the team (the sale is deployed, not started).
+the USDT held since the last withdrawal. There are no buyer refunds. Nobody can pause the sale after it starts. The sale
+STARTED on 2026-10-30 21:04 (UTC+8); read \`GET /v1/chyai\` for the live stage and price.
 
 ## 0. Wallet
 \`\`\`
