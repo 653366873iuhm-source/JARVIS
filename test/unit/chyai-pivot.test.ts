@@ -27,12 +27,17 @@ let app2: FastifyInstance; // frozen, nothing deployed
 let app3: FastifyInstance; // not frozen (old behaviour)
 const files: string[] = [];
 let allowance = 0n;
+let closedFlag = false;
 
 const pc = {
   async readContract({ functionName, args }: { functionName: string; args?: unknown[] }) {
     switch (functionName) {
       case "overview":
         return [true, false, false, 2n, 2n * 10n ** 18n, 1n, 2n, 2100n, 7n, 1007n, 1014n * 10n ** 18n, 100n];
+      case "closed":
+        return closedFlag;
+      case "saleEndsAt":
+        return 1793329718n + 30n * 86400n;
       case "walletStatus":
         return [args?.[0] === WALLET, 1n, 3n, 7n];
       case "allowance":
@@ -112,7 +117,8 @@ describe("agent docs switch to the CHYAI sale", () => {
     expect(llms).toContain("Stage 8: 48 USDT per share, 4500 shares");
     expect(llms).toContain("410");
     expect(llms).toContain("20% to the treasury");
-    expect(llms).toContain("stage 8 has no end time");
+    expect(llms).toContain("stage 8 ends at sell-out or at the 30-day deadline");
+    expect(llms).toContain("the sale closes for good");
     expect(md).toContain("no buyer refunds".replace("no buyer refunds", "are no buyer refunds"));
     const card = (await get(app, "/.well-known/agent.json")).json();
     expect(card.version).toBe("2.0.0");
@@ -143,7 +149,14 @@ describe("/v1/chyai", () => {
   it("info with the sale (chain mocked)", async () => {
     const r = (await get(app, "/v1/chyai")).json();
     expect(r.deployed).toBe(true);
-    expect(r.sale).toMatchObject({ started: true, stage: 2, priceUsdt: "2", stageCap: 2100, stageSold: 7 });
+    expect(r.sale).toMatchObject({ started: true, stage: 2, priceUsdt: "2", stageCap: 2100, stageSold: 7, closed: false, saleEndsAt: 1793329718 + 30 * 86400 });
+    expect(r.rules.valve).toContain("closes for good");
+  });
+  it("buy steps refused once the 30-day deadline closed the sale", async () => {
+    closedFlag = true;
+    const r = (await get(app, `/v1/chyai/buy?wallet=${WALLET}&shares=1`)).json();
+    closedFlag = false;
+    expect(r.error.code).toBe("closed");
   });
   it("buy steps: approve + buy(shares, maxCost) for USDT, value for BNB, limits", async () => {
     allowance = 0n;
