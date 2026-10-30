@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../../context.js";
 import { ApiError } from "../../services/registration.js";
+import { miningFrozen } from "../../services/mining.js";
 import { issueCredentialVoucher } from "../../services/credential.js";
 import { getInvites, inviteLeaderboard, weeklyInviteLeaderboard } from "../../services/invites.js";
 import { adminTestApprove, airdropVerifySweep, resolveAgentName } from "../../services/airdrop.js";
@@ -22,6 +23,7 @@ export function registerAirdropRoutes(app: FastifyInstance, ctx: AppContext, adm
   app.get("/v1/airdrop/stats", async () => airdropStats(ctx));
 
   app.post("/v1/airdrop/claim", async (req, reply) => {
+    if (miningFrozen(ctx.cfg)) throw new ApiError(410, "airdrop_closed", "The credential airdrop has ended. Past miners and credential holders get 10,000 CHYAI (see /v1/chyai). 空投申请已结束。");
     const ip = clientIp(req);
     if (!global.take("all") || !perIp.take(ip)) {
       reply.header("retry-after", "600");
@@ -63,6 +65,7 @@ export function registerAirdropRoutes(app: FastifyInstance, ctx: AppContext, adm
   // the wallet submits the returned calldata itself (gas paid by the user). Vouchers only work for msg.sender == wallet.
   const voucherIp = new RateLimiter(20, 10 * 60_000);
   app.get<{ Querystring: { wallet?: string } }>("/v1/airdrop/voucher", async (req, reply) => {
+    if (miningFrozen(ctx.cfg)) throw new ApiError(410, "airdrop_closed", "Credential minting has ended. 凭证 mint 已结束。");
     if (!voucherIp.take(clientIp(req))) {
       reply.header("retry-after", "600");
       throw new ApiError(429, "rate_limited", "请求太频繁，请稍后再试");

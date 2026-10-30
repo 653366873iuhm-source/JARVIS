@@ -11,6 +11,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../../context.js";
 import { apiBase, OFFICIAL_X, PINNED_POST } from "./agentflow.js";
+import { chyaiAgentCard, chyaiLlmsTxt } from "./chyai.js";
 
 export const SITE_URL = "https://chyai.onrender.com";
 export const PUBLIC_API = "https://agentpad-api.onrender.com";
@@ -157,13 +158,17 @@ export function agentCard(api: string = PUBLIC_API, site: string = SITE_URL) {
   };
 }
 
-export function registerDiscoveryRoutes(app: FastifyInstance, _ctx: AppContext) {
+export function registerDiscoveryRoutes(app: FastifyInstance, ctx: AppContext) {
   const base = (req: FastifyRequest) => apiBase(req);
+  const frozen = () => ctx.cfg.MINING_FROZEN_AT > 0; // CHYAI pivot
   app.get("/llms.txt", async (req, reply) =>
-    reply.header("content-type", "text/plain; charset=utf-8").header("cache-control", "public, max-age=300").send(llmsTxt(base(req))),
+    reply.header("content-type", "text/plain; charset=utf-8").header("cache-control", "public, max-age=300").send(frozen() ? chyaiLlmsTxt(base(req)) : llmsTxt(base(req))),
   );
   const card = async (req: FastifyRequest, reply: any) =>
-    reply.header("content-type", "application/json; charset=utf-8").header("cache-control", "public, max-age=300").send(JSON.stringify(agentCard(base(req)), null, 2));
+    reply
+      .header("content-type", "application/json; charset=utf-8")
+      .header("cache-control", "public, max-age=300")
+      .send(JSON.stringify(frozen() ? chyaiAgentCard(base(req)) : agentCard(base(req)), null, 2));
   app.get("/.well-known/agent.json", card);
   app.get("/.well-known/agent-card.json", card);
 }

@@ -19,6 +19,7 @@ import { checksum } from "../../lib/util.js";
 import { normalizeRef } from "../../services/invites.js";
 import { minPoolWei } from "../../services/rewards.js";
 import { formatEther } from "viem";
+import { chyaiAddresses, chyaiAgentMarkdown } from "./chyai.js";
 
 export const OFFICIAL_X = "https://x.com/ChyAI_Official";
 export const PINNED_POST = "https://x.com/ChyAI_Official/status/2115430735167607129";
@@ -37,6 +38,15 @@ export function agentPrompt(base: string, ref?: string | null) {
     `我的 X 用户名：<你的X用户名>；我引用转发/回复 ChyAI 置顶帖的链接：<帖子链接>。`,
     ...(r ? [`邀请人：${r}（申请时在 claim 里带上 "ref":"${r}"）。`] : []),
     `钱包和 .ai 名称从 baw 读取。每笔交易和签名先给我看 preview，我确认后再 execute；之后每天自动签到一次。`,
+  ].join("\n");
+}
+
+/** CHYAI sale prompt (after the 2026-10-30 pivot). */
+export function chyaiPrompt(base: string) {
+  return [
+    `请用我的 Binance Agentic Wallet（baw CLI）按 ${base}/agent.md 的步骤，帮我参与 ChyAI 平台币 CHYAI 打新：先读 ${base}/v1/chyai 看当前阶段和价格，再用 ${base}/v1/chyai/buy 生成的 baw 步骤购买 <份数> 份（每个 Agent ID 每阶段最多 10 份），用 USDT 支付。`,
+    `如果我是老矿工，开池后再用 ${base}/v1/chyai/airdrop/<我的钱包> 领取 10,000 CHYAI 空投。`,
+    `每笔交易先给我看 preview，我确认后再 execute。`,
   ].join("\n");
 }
 
@@ -178,10 +188,22 @@ export async function agentFlow(ctx: AppContext, walletIn: string, base: string)
 }
 
 export function registerAgentFlowRoutes(app: FastifyInstance, ctx: AppContext) {
+  const frozen = () => ctx.cfg.MINING_FROZEN_AT > 0; // CHYAI pivot: agent.md describes the token sale instead
   const md = async (req: FastifyRequest, reply: any) =>
-    reply.header("content-type", "text/markdown; charset=utf-8").header("cache-control", "public, max-age=300").send(agentMarkdown(apiBase(req), ctx.cfg.CHAIN_ID, formatEther(minPoolWei(ctx.cfg))));
+    reply
+      .header("content-type", "text/markdown; charset=utf-8")
+      .header("cache-control", "public, max-age=300")
+      .send(frozen() ? chyaiAgentMarkdown(apiBase(req), ctx.cfg.CHAIN_ID, chyaiAddresses(ctx)) : agentMarkdown(apiBase(req), ctx.cfg.CHAIN_ID, formatEther(minPoolWei(ctx.cfg))));
   app.get("/agent.md", md);
   app.get("/v1/agent.md", md);
-  app.get<{ Querystring: { ref?: string } }>("/v1/agent/prompt", async (req) => ({ prompt: agentPrompt(apiBase(req), req.query.ref), instructions: `${apiBase(req)}/agent.md` }));
-  app.get<{ Querystring: { wallet?: string } }>("/v1/agent/flow", async (req) => agentFlow(ctx, String(req.query.wallet ?? ""), apiBase(req)));
+  app.get<{ Querystring: { ref?: string } }>("/v1/agent/prompt", async (req) =>
+    frozen()
+      ? { prompt: chyaiPrompt(apiBase(req)), instructions: `${apiBase(req)}/agent.md` }
+      : { prompt: agentPrompt(apiBase(req), req.query.ref), instructions: `${apiBase(req)}/agent.md` },
+  );
+  app.get<{ Querystring: { wallet?: string } }>("/v1/agent/flow", async (req) =>
+    frozen()
+      ? { closed: true, detail: "The airdrop credential / mining / check-in flow ended on 2026-10-30. See /v1/chyai (CHYAI sale) and /v1/chyai/airdrop/<wallet> (10,000 CHYAI for past miners).", instructions: `${apiBase(req)}/agent.md`, next: "chyai_sale" }
+      : agentFlow(ctx, String(req.query.wallet ?? ""), apiBase(req)),
+  );
 }

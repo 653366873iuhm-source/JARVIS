@@ -87,6 +87,7 @@ export function bawCheckin(wallet: string, day: string, chainId: number) {
  * a wallet that now holds a credential gets its account opened (accrual starts) without anyone opening the site.
  */
 export async function activateMintedCredentials(ctx: AppContext, limit = 200) {
+  if (miningFrozen(ctx.cfg)) return { checked: 0, activated: 0 };
   const { db, t } = ctx.database;
   const rows = await db
     .select({ wallet: t.airdropClaims.wallet, acct: t.miningAccounts.wallet })
@@ -204,8 +205,14 @@ type Account = typeof import("../db/schema.sqlite.js").miningAccounts.$inferSele
  * Settled points + accrual since the last settle. When an early bird's boost ended in between (`ebEnd`), the interval
  * is split there: the stored rate up to ebEnd, the rate without the early-bird share after it.
  */
-function liveE8(cfg: AppContext["cfg"], a: Account, now: number, ebEnd?: number | null) {
+/** Mining is frozen (CHYAI pivot): accrual stops at MINING_FROZEN_AT. */
+export const miningFrozen = (cfg: AppContext["cfg"]) => cfg.MINING_FROZEN_AT > 0;
+export const accrualNow = (cfg: AppContext["cfg"], now: number) => (cfg.MINING_FROZEN_AT > 0 ? Math.min(now, cfg.MINING_FROZEN_AT) : now);
+
+function liveE8(cfg: AppContext["cfg"], a: Account, nowIn: number, ebEnd?: number | null) {
+  const now = accrualNow(cfg, nowIn);
   const last = a.lastAccrualAt;
+  if (now <= last) return a.pointsE8;
   if (ebEnd && last < ebEnd && now > ebEnd) {
     const base = (a.credit / 1000) * cfg.MINING_POINTS_PER_1000_CREDIT_DAY * E8;
     const bonus = Math.round(base * cfg.EARLYBIRD_BOOST);
@@ -229,7 +236,7 @@ async function settle(ctx: AppContext, wallet: string, now: number) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const [a] = await db.select().from(t.miningAccounts).where(eq(t.miningAccounts.wallet, wallet));
     if (!a) {
-      if (credit <= 0) return { account: null, cred, act, rate, invites, eb };
+      if (credit <= 0 || miningFrozen(ctx.cfg)) return { account: null, cred, act, rate, invites, eb };
       const row = { wallet, pointsE8: 0, checkinE8: 0, rateE8PerDay: rate.rateE8, credit, lastAccrualAt: now, createdAt: now, updatedAt: now };
       const ins = await db.insert(t.miningAccounts).values(row).onConflictDoNothing().returning();
       if (ins.length) clearEarlyBirdCache();
@@ -240,7 +247,7 @@ async function settle(ctx: AppContext, wallet: string, now: number) {
     // optimistic lock on lastAccrualAt so concurrent settles never accrue the same interval twice
     const upd = await db
       .update(t.miningAccounts)
-      .set({ pointsE8, rateE8PerDay: rate.rateE8, credit, lastAccrualAt: Math.max(now, a.lastAccrualAt), updatedAt: now })
+      .set({ pointsE8, rateE8PerDay: rate.rateE8, credit, lastAccrualAt: Math.max(accrualNow(ctx.cfg, now), a.lastAccrualAt), updatedAt: now })
       .where(and(eq(t.miningAccounts.wallet, wallet), eq(t.miningAccounts.lastAccrualAt, a.lastAccrualAt)))
       .returning();
     if (upd.length) return { account: upd[0] as Account, cred, act, rate, invites, eb };
@@ -302,6 +309,7 @@ export async function getMining(ctx: AppContext, walletIn: string) {
 }
 
 export async function checkin(ctx: AppContext, body: { wallet: string; signature: string; message?: string; signType?: string; signatureRecovery?: string }) {
+  if (miningFrozen(ctx.cfg)) throw new ApiError(410, "mining_closed", "Mining and check-ins have ended (ChyAI moved to the CHYAI token sale; past miners get a 10,000 CHYAI airdrop). 挖矿与签到已结束。");
   const wallet = normalizeWallet(body.wallet);
   const now = nowSec();
   const day = utcDay(now);

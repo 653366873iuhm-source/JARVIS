@@ -188,10 +188,10 @@ describe("monitoring", () => {
     clearHealthCache();
   });
 
-  it("/v1/config: default announcement (zh+en, links to the airdrop) and community links (unset/unsafe hidden)", async () => {
+  it("/v1/config: default announcement (zh+en, links to the CHYAI sale) and community links (unset/unsafe hidden)", async () => {
     const c = await get("/v1/config");
     expect(c.body.announcements).toEqual([
-      { id: "airdrop-agent-2026-10", zh: "空投已开放：交给 AI Agent 一条指令跑完全流程", en: "Airdrop is live: give your AI agent one command to run the whole flow", href: "/airdrop", level: "info" },
+      { id: "chyai-sale-2026-10", zh: "平台币 CHYAI 打新即将开放（越早价格越低）；老矿工和凭证持有者每个钱包额外空投 10,000 CHYAI", en: "The CHYAI platform-token sale opens soon (the earlier, the lower the price); past miners and credential holders get an extra 10,000 CHYAI each", href: "/sale", level: "info" },
     ]);
     expect(c.body.community).toEqual({ x: "https://x.com/ChyAI_Official", telegram: "", discord: "" });
     expect(parseAnnouncements("not json")).toEqual([]);

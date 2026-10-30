@@ -163,6 +163,13 @@ export const ConfigSchema = z.object({
   EARLYBIRD_END_AT: z.string().default("2026-11-30T23:59:00+08:00"),
   // public mining stats (participants / mining / total points / check-ins today) are withheld below this many participants
   MINING_STATS_MIN_PARTICIPANTS: num(100),
+  // ---- CHYAI pivot (2026-10-30): mining / check-ins / airdrop claims frozen at this unix time (0 = not frozen).
+  // Points stop accruing at this moment; check-ins and new airdrop claims / vouchers answer 410 *_closed.
+  MINING_FROZEN_AT: num(0),
+  // CHYAI platform token (placeholders until the coordinated release)
+  CHYAI_SALE: z.string().default(""),
+  CHYAI_TOKEN: z.string().default(""),
+  CHYAI_AIRDROP: z.string().default(""),
 
   // ---- monitoring / alerts
   SIGNER_LOW_BALANCE_BNB: num(0.0008), // signerLow:true below this (≈ 1 week of platform txs)
@@ -174,7 +181,7 @@ export const ConfigSchema = z.object({
   // ---- site config served at /v1/config (announcement bar + community links; unset links are hidden)
   // JSON array of {id, zh, en, href?, level?}; "" or "[]" = no announcement
   ANNOUNCEMENTS_JSON: z.string().default(JSON.stringify([
-    { id: "airdrop-agent-2026-10", zh: "空投已开放：交给 AI Agent 一条指令跑完全流程", en: "Airdrop is live: give your AI agent one command to run the whole flow", href: "/airdrop", level: "info" },
+    { id: "chyai-sale-2026-10", zh: "平台币 CHYAI 打新即将开放（越早价格越低）；老矿工和凭证持有者每个钱包额外空投 10,000 CHYAI", en: "The CHYAI platform-token sale opens soon (the earlier, the lower the price); past miners and credential holders get an extra 10,000 CHYAI each", href: "/sale", level: "info" },
   ])),
   COMMUNITY_X: z.string().default("https://x.com/ChyAI_Official"),
   COMMUNITY_TELEGRAM: z.string().default(""),

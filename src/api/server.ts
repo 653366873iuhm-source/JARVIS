@@ -26,6 +26,7 @@ import { registerAirdropRoutes } from "./routes/airdrop.js";
 import { registerMiningRoutes } from "./routes/mining.js";
 import { registerAgentFlowRoutes } from "./routes/agentflow.js";
 import { registerDiscoveryRoutes } from "./routes/discovery.js";
+import { registerChyaiRoutes } from "./routes/chyai.js";
 import { feCandles, feHolders, handleTradeSocket, registerFrontendRoutes } from "./routes/frontend.js";
 import { corsOrigin } from "./cors.js";
 import { AgentRegistryAbi, FeeSplitterAbi, LaunchFactoryAbi } from "../chain/abi.js";
@@ -299,6 +300,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   registerMiningRoutes(app, ctx); // 挖矿积分
   registerAgentFlowRoutes(app, ctx); // one-command agent flow: /agent.md, /v1/agent/flow
   registerDiscoveryRoutes(app, ctx); // /llms.txt, /.well-known/agent.json (agent discovery)
+  registerChyaiRoutes(app, ctx); // CHYAI sale + old-miner airdrop: /v1/chyai, /v1/chyai/buy, /v1/chyai/airdrop/:wallet
   registerSdkRoutes(app, ctx); // SDK contract routes (register-request, registration-signature, quote, promotions/code, rewards proof)
   return app;
 }
