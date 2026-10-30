@@ -5,7 +5,7 @@ staged sale for your user and, for past ChyAI miners, claims the 10,000 CHYAI ai
 and check-in flow has **ended** (2026-10-30); its endpoints answer 410.
 
 API base: `https://agentpad-api.onrender.com/v1` · chain: BSC (binanceChainId 56) · site: https://chyai.onrender.com/#/sale · official X: https://x.com/ChyAI_Official
-Contracts: sale `<SALE — published after deployment>` · token `<published after deployment>` · airdrop `<published after deployment>`
+Contracts: sale `0x0Ada71a9538A89B946AF000b7FF61191f3E54cf1` · token `0xD9874C2c12F44a52B6c7B93FC18A4bA78BB10Cfc` · airdrop `0x9967Aa40d0C05b53004E769C065a1F331BF00AB1`
 
 Rules: never invent calldata — always use what the API returns. Every `baw contract-call` is two-step: `preview`, show the
 user the parsed tx and risks, wait for an explicit yes, then `execute --requestId`. The contracts are **not audited**; no
@@ -24,11 +24,13 @@ returns are promised; the price after the pool opens may be lower than the sale 
 | 8 | 48 | 4,500 |
 
 The earlier, the lower the price. Stages 1-7 last 24h; unsold shares roll into the next stage; a stage that sells out early
-starts the next one at once. Stage 8 runs until every remaining share is sold or the **30-day deadline** passes. Max **10 shares per .ai
+starts the next one at once. Stage 8 has **no time limit** — it runs until every remaining share is sold. Max **10 shares per .ai
 Agent ID per stage**. Each payment: 20% to the treasury 0x972be707B4e070aC290206221e90Ff837eC14E9B, 80% held in the contract. The tx that sells the last
 share opens the PancakeSwap CHYAI/USDT pool automatically (>= 0.00048 USDT per CHYAI), burns the LP, enables trading and
-ends all admin rights. If it is not sold out within 30 days of the start, the sale closes for good (no pool) and only the
-treasury can withdraw everything the contract holds — there are no buyer refunds. The start time is announced by the team (the sale is deployed paused).
+ends all admin rights. From 30 days after the start (`valveOpensAt`), while the pool has not opened, the treasury may
+withdraw everything the contract holds, repeatedly; the sale keeps running and a later sell-out still opens the pool with
+the USDT held since the last withdrawal. There are no buyer refunds. Nobody can pause the sale after it starts. The start
+time is announced by the team (the sale is deployed, not started).
 
 ## 0. Wallet
 ```
@@ -38,7 +40,7 @@ baw wallet settings --json         # devMode.enabled must be true (contract call
 The wallet must hold a Binance .ai Agent ID (checked on-chain). Without one the sale contract rejects the purchase.
 
 ## 1. State
-`GET https://agentpad-api.onrender.com/v1/chyai` → `sale` (started / paused / finished, stage, priceUsdt, stageEnd, stageCap, stageSold).
+`GET https://agentpad-api.onrender.com/v1/chyai` → `sale` (started / finished, stage, priceUsdt, stageEnd (0 in stage 8), stageCap, stageSold, valveOpensAt, valveOpen).
 
 ## 2. Buy (agent; user approves each tx)
 ```
@@ -47,7 +49,7 @@ curl -s "https://agentpad-api.onrender.com/v1/chyai/buy?wallet=<WALLET>&shares=<
 Run every `steps[].baw` in order (USDT: `approve_usdt` only when the allowance is short, then `buy`; BNB: one
 `buy_bnb` with value — excess BNB is refunded in the same tx), show each preview, execute after the user's yes. If the
 stage changed in between, `buy` reverts with OverMaxCost: fetch new steps. Errors: `no_agent_id`, `over_limit`,
-`not_started`, `paused`, `finished`.
+`not_started`, `finished`.
 
 ## 3. Past-miner airdrop (10,000 CHYAI)
 ```
