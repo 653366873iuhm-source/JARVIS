@@ -31,8 +31,8 @@ export const STAGES = [
 
 const saleAbi = parseAbi([
   "function overview() view returns (bool isStarted, bool isPaused, bool isFinished, uint256 stage, uint256 price, uint256 stageStart, uint256 stageEnd, uint256 stageCap, uint256 stageSold, uint256 sharesSold, uint256 paid, uint256 held)",
-  "function closed() view returns (bool)",
-  "function saleEndsAt() view returns (uint256)",
+  "function valveOpen() view returns (bool)",
+  "function valveOpensAt() view returns (uint256)",
   "function walletStatus(address account) view returns (bool ok, uint256 id, uint256 bought, uint256 left)",
   "function bnbQuote(uint256 shares) view returns (uint256)",
   "function buy(uint256 shares, uint256 maxCost)",
@@ -52,9 +52,9 @@ export const CHYAI_RULES = {
   tokensPerShare: "100000",
   stageHours: 24,
   maxSharesPerAgentIdPerStage: 10,
-  rollover: "Stages 1-7 last 24h; unsold shares roll into the next stage (sold at that stage's price). A stage that sells out early ends at once and the next starts in that block. Stage 8 runs until every remaining share (incl. rolled over) is sold or the 30-day deadline (start + 30 days) passes, whichever comes first.",
+  rollover: "Stages 1-7 last 24h; unsold shares roll into the next stage (sold at that stage's price). A stage that sells out early ends at once and the next starts in that block. Stage 8 has NO time limit: it runs until every remaining share (incl. rolled over) is sold. There is no deadline that closes the sale and nobody can pause it after start().",
   autoPool: "The transaction that sells the last share opens the PancakeSwap V2 CHYAI/USDT pool automatically with all held USDT at >= 0.00048 USDT per CHYAI (CHYAI = held USDT / 0.00048, capped at 846,666,666), sends the LP to 0x...dEaD, enables trading and ends every admin right. Never otherwise.",
-  valve: "Hard deadline = start + 30 days. If not every share is sold by then, the sale closes for good (no more buys, no pool, no trading) and ONLY the treasury can withdraw everything the sale contract holds (all held USDT plus any BNB / WBNB / other tokens sent to it; never CHYAI). No buyer refunds or claims; CHYAI already bought stays in buyers' wallets (transferable, but no pool).",
+  valve: "Treasury valve: from start + 30 days + 1 s (valveOpensAt()), as long as the pool has not opened, ONLY the treasury may withdraw everything the sale contract holds (all held USDT plus any BNB / WBNB / other tokens sent to it; never CHYAI), at any time and repeatedly. The sale keeps running after a withdrawal; a later sell-out still opens the pool, with only the USDT held since the last withdrawal (price still >= 0.00048). No buyer refunds or claims; until the pool opens, CHYAI already bought can only be transferred between wallets (no pool).",
   buyerRequirement: "A Binance Agentic Wallet holding a .ai Agent ID (checked on-chain, SPACE ID registry 0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F).",
   payment: "USDT, or BNB (Chainlink BNB/USD +1%, swapped to USDT in the same tx, excess refunded). Every purchase: 20% to the treasury at once, 80% held in the sale contract (USDT) for the automatic pool.",
   treasury: TREASURY,
@@ -71,13 +71,13 @@ export async function chyaiInfo(ctx: AppContext) {
   let sale: Record<string, unknown> | null = null;
   if (a.sale) {
     try {
-      const [r, closed, endsAt] = await Promise.all([
+      const [r, valveOpen, valveAt] = await Promise.all([
         ctx.pc.readContract({ address: a.sale, abi: saleAbi, functionName: "overview" }),
-        ctx.pc.readContract({ address: a.sale, abi: saleAbi, functionName: "closed" }),
-        ctx.pc.readContract({ address: a.sale, abi: saleAbi, functionName: "saleEndsAt" }),
+        ctx.pc.readContract({ address: a.sale, abi: saleAbi, functionName: "valveOpen" }),
+        ctx.pc.readContract({ address: a.sale, abi: saleAbi, functionName: "valveOpensAt" }),
       ]);
       sale = {
-        started: r[0], paused: r[1] && !closed, finished: r[2], closed, saleEndsAt: Number(endsAt), stage: Number(r[3]), priceUsdt: formatEther(r[4]),
+        started: r[0], paused: r[1], finished: r[2], valveOpen, valveOpensAt: Number(valveAt), stage: Number(r[3]), priceUsdt: formatEther(r[4]),
         stageStart: Number(r[5]), stageEnd: Number(r[6]), stageCap: Number(r[7]), stageSold: Number(r[8]),
         sharesSold: Number(r[9]), paidUsdt: formatEther(r[10]), heldUsdt: formatEther(r[11]),
       };
@@ -108,15 +108,12 @@ export async function chyaiBuySteps(ctx: AppContext, walletIn: string, sharesIn:
   const shares = Math.floor(Number(sharesIn));
   if (!(shares >= 1 && shares <= 10)) throw new ApiError(400, "validation_error", "shares must be 1..10");
   const pay = payIn === "bnb" ? "bnb" : "usdt";
-  const [ov, ws, closed] = await Promise.all([
+  const [ov, ws] = await Promise.all([
     ctx.pc.readContract({ address: a.sale, abi: saleAbi, functionName: "overview" }),
     ctx.pc.readContract({ address: a.sale, abi: saleAbi, functionName: "walletStatus", args: [wallet] }),
-    ctx.pc.readContract({ address: a.sale, abi: saleAbi, functionName: "closed" }),
   ]);
   if (!ov[0]) throw new ApiError(409, "not_started", "The sale has not started yet.");
   if (ov[2]) throw new ApiError(409, "finished", "The sale has ended.");
-  if (closed) throw new ApiError(409, "closed", "The sale closed: it did not sell out within 30 days of the start. No more purchases are possible.");
-  if (ov[1]) throw new ApiError(409, "paused", "The sale is paused.");
   if (!ws[0]) throw new ApiError(422, "no_agent_id", "This wallet has no Binance .ai Agent ID.");
   if (Number(ws[3]) < shares) throw new ApiError(422, "over_limit", `This Agent ID can buy ${Number(ws[3])} more share(s) in the current stage.`);
   const chainId = ctx.cfg.CHAIN_ID;
@@ -199,11 +196,13 @@ returns are promised; the price after the pool opens may be lower than the sale 
 ${STAGES.map((x) => `| ${x.stage} | ${x.priceUsdt} | ${x.shares.toLocaleString("en-US")} |`).join("\n")}
 
 The earlier, the lower the price. Stages 1-7 last 24h; unsold shares roll into the next stage; a stage that sells out early
-starts the next one at once. Stage 8 runs until every remaining share is sold or the **30-day deadline** passes. Max **10 shares per .ai
+starts the next one at once. Stage 8 has **no time limit** — it runs until every remaining share is sold. Max **10 shares per .ai
 Agent ID per stage**. Each payment: 20% to the treasury ${TREASURY}, 80% held in the contract. The tx that sells the last
 share opens the PancakeSwap CHYAI/USDT pool automatically (>= 0.00048 USDT per CHYAI), burns the LP, enables trading and
-ends all admin rights. If it is not sold out within 30 days of the start, the sale closes for good (no pool) and only the
-treasury can withdraw everything the contract holds — there are no buyer refunds. The start time is announced by the team (the sale is deployed paused).
+ends all admin rights. From 30 days after the start (\`valveOpensAt\`), while the pool has not opened, the treasury may
+withdraw everything the contract holds, repeatedly; the sale keeps running and a later sell-out still opens the pool with
+the USDT held since the last withdrawal. There are no buyer refunds. Nobody can pause the sale after it starts. The start
+time is announced by the team (the sale is deployed, not started).
 
 ## 0. Wallet
 \`\`\`
@@ -213,7 +212,7 @@ baw wallet settings --json         # devMode.enabled must be true (contract call
 The wallet must hold a Binance .ai Agent ID (checked on-chain). Without one the sale contract rejects the purchase.
 
 ## 1. State
-\`GET ${api}/chyai\` → \`sale\` (started / paused / finished, stage, priceUsdt, stageEnd, stageCap, stageSold).
+\`GET ${api}/chyai\` → \`sale\` (started / finished, stage, priceUsdt, stageEnd (0 in stage 8), stageCap, stageSold, valveOpensAt, valveOpen).
 
 ## 2. Buy (agent; user approves each tx)
 \`\`\`
@@ -222,7 +221,7 @@ curl -s "${api}/chyai/buy?wallet=<WALLET>&shares=<1-10>&pay=usdt"     # or pay=b
 Run every \`steps[].baw\` in order (USDT: \`approve_usdt\` only when the allowance is short, then \`buy\`; BNB: one
 \`buy_bnb\` with value — excess BNB is refunded in the same tx), show each preview, execute after the user's yes. If the
 stage changed in between, \`buy\` reverts with OverMaxCost: fetch new steps. Errors: \`no_agent_id\`, \`over_limit\`,
-\`not_started\`, \`paused\`, \`finished\`.
+\`not_started\`, \`finished\`.
 
 ## 3. Past-miner airdrop (10,000 CHYAI)
 \`\`\`
@@ -249,8 +248,8 @@ export function chyaiLlmsTxt(api: string, site: string = CHYAI_SITE) {
 AI agents: read ${api}/agent.md and follow it. State: ${v1}/chyai. Buy steps: ${v1}/chyai/buy?wallet=<WALLET>&shares=<1-10>&pay=usdt|bnb. Past-miner airdrop: ${v1}/chyai/airdrop/<WALLET>.
 
 ## CHYAI sale
-${STAGES.map((x) => `- Stage ${x.stage}: ${x.priceUsdt} USDT per share, ${x.shares} shares, ${x.stage === 8 ? "until sold out or the 30-day deadline" : "24h"}`).join("\n")}
-- Unsold shares roll into the next stage; an early sellout starts the next stage at once; stage 8 ends at sell-out or at the 30-day deadline (start + 30 days), whichever is first.
+${STAGES.map((x) => `- Stage ${x.stage}: ${x.priceUsdt} USDT per share, ${x.shares} shares, ${x.stage === 8 ? "until sold out (no time limit)" : "24h"}`).join("\n")}
+- Unsold shares roll into the next stage; an early sellout starts the next stage at once; stage 8 has no end time and runs until sold out. No pause after start.
 - Max 10 shares per .ai Agent ID per stage. Pay USDT or BNB. 20% to the treasury ${TREASURY}, 80% held for the pool.
 - ${CHYAI_RULES.autoPool}
 - ${CHYAI_RULES.valve}
