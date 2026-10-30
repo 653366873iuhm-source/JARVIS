@@ -24,11 +24,11 @@ returns are promised; the price after the pool opens may be lower than the sale 
 | 8 | 48 | 4,500 |
 
 The earlier, the lower the price. Stages 1-7 last 24h; unsold shares roll into the next stage; a stage that sells out early
-starts the next one at once. Stage 8 has no end time — it runs until every remaining share is sold. Max **10 shares per .ai
+starts the next one at once. Stage 8 runs until every remaining share is sold or the **30-day deadline** passes. Max **10 shares per .ai
 Agent ID per stage**. Each payment: 20% to the treasury 0x972be707B4e070aC290206221e90Ff837eC14E9B, 80% held in the contract. The tx that sells the last
 share opens the PancakeSwap CHYAI/USDT pool automatically (>= 0.00048 USDT per CHYAI), burns the LP, enables trading and
-ends all admin rights. If it is not sold out 30 days after the start, only the treasury can withdraw the held USDT — there
-are no buyer refunds. The start time is announced by the team (the sale is deployed paused).
+ends all admin rights. If it is not sold out within 30 days of the start, the sale closes for good (no pool) and only the
+treasury can withdraw everything the contract holds — there are no buyer refunds. The start time is announced by the team (the sale is deployed paused).
 
 ## 0. Wallet
 ```
